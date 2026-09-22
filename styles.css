@@ -125,6 +125,11 @@ h2 { margin-bottom: 8px; font-size: 2.2rem; line-height: 1; font-weight: 400; }
 .piece.p1 { background: var(--accent); }
 .piece.p2 { background: var(--blue); }
 .piece.dim { opacity: 0.55; }
+/* `.piece` sets its own `display: flex`, which otherwise beats the browser's
+   built-in `[hidden] { display: none }` rule at equal specificity (author
+   styles always win over the UA stylesheet) — so a piece that moved away
+   stayed visibly rendered even with the `hidden` attribute correctly set. */
+.piece[hidden] { display: none; }
 
 .counts { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 0; }
 .count-chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border: 1px solid var(--line); background: var(--panel); font: 0.78rem Arial, sans-serif; }

@@ -1,1 +1,2 @@
-http://10.11.172.241:6767
+- npm start
+- Then access at http://10.11.172.241:6767

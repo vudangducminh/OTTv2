@@ -594,7 +594,12 @@ function renderBoard(table, acting, mark) {
       pieceEl.className = 'piece p' + piece.player + (piece.player !== table.turn ? ' dim' : '');
       pieceEl.title = `${PLAYER_NAME[piece.player]} · ${PIECE_NAME[piece.type]}`;
     } else {
+      // A square a piece just moved away from must not keep showing its old
+      // glyph — clear the content, not just the `hidden` flag, so nothing
+      // stale is left for a CSS rule (or anything else) to accidentally reveal.
       pieceEl.hidden = true;
+      pieceEl.textContent = '';
+      pieceEl.className = 'piece';
       pieceEl.title = '';
     }
 
