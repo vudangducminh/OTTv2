@@ -743,7 +743,7 @@ function buildBoard() {
       cell.setAttribute('aria-label', `${FILES[col]}${displayRow + 1}`);
 
       if (index === 0 || index === CELL_COUNT - 1) {
-        cell.classList.add('goal');
+        cell.classList.add('goal', index === 0 ? 'corner-a1' : 'corner-i9');
         const tag = document.createElement('span');
         tag.className = 'corner-tag';
         tag.textContent = index === 0 ? 'a1' : 'i9';
@@ -852,7 +852,6 @@ async function start() {
 
   await playhtml.init({
     room: ROOM,
-    cursors: { enabled: true, room: 'page' },
     onError: () => showNotice('Lost the connection to the hall. Reload to try again.'),
   });
   await playhtml.ready;
