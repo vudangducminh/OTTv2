@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Oẳn Tù Tì · Cửu Cung Chiến</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700;9..144,900&family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#EDE2CE;
+    --bg-soft:#F4EDDD;
+    --wood-light:#E7C99A;
+    --wood-dark:#C6935A;
+    --wood-line:#7A5330;
+    --ink:#2B2118;
+    --ink-soft:#5C4E3E;
+    --p1:#B23A2E;
+    --p1-soft:#E7BDB6;
+    --p2:#1F4E5F;
+    --p2-soft:#B9D3DA;
+    --gold:#C9972B;
+    --goal:#5B7B4F;
+    --goal-soft:#CFE0C4;
+    --card-bg:#FBF7EC;
+    --line:#D9C7A5;
+    --danger:#8C2A20;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    box-sizing: border-box;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#211A12;
+      --bg-soft:#2A2119;
+      --wood-light:#5C4527;
+      --wood-dark:#3E2E1A;
+      --wood-line:#1B140C;
+      --ink:#F1E7D5;
+      --ink-soft:#C9BBA1;
+      --p1:#E06455;
+      --p1-soft:#4A2620;
+      --p2:#5FA9C2;
+      --p2-soft:#1E3A42;
+      --gold:#E3B85A;
+      --goal:#8CB37A;
+      --goal-soft:#2C3B27;
+      --card-bg:#2A2119;
+      --line:#473A28;
+      --danger:#E06455;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#211A12; --bg-soft:#2A2119; --wood-light:#5C4527; --wood-dark:#3E2E1A;
+    --wood-line:#1B140C; --ink:#F1E7D5; --ink-soft:#C9BBA1; --p1:#E06455; --p1-soft:#4A2620;
+    --p2:#5FA9C2; --p2-soft:#1E3A42; --gold:#E3B85A; --goal:#8CB37A; --goal-soft:#2C3B27;
+    --card-bg:#2A2119; --line:#473A28; --danger:#E06455;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--ink);
+    font-family:'Be Vietnam Pro', system-ui, sans-serif;
+    min-height:100%;
+    padding: 28px 20px calc(28px + env(safe-area-inset-bottom,0px));
+    scroll-padding-top: env(safe-area-inset-top, 0px);
+  }
+  .wrap{
+    max-width: 1040px;
+    margin: 0 auto;
+  }
+  header{
+    margin-bottom: 22px;
+  }
+  .eyebrow{
+    font-size: 13px;
+    color: var(--ink-soft);
+    letter-spacing: 0.02em;
+    margin: 0 0 4px 0;
+  }
+  h1{
+    font-family:'Fraunces', serif;
+    font-optical-sizing: auto;
+    font-weight: 700;
+    font-size: clamp(28px, 4vw, 40px);
+    margin: 0 0 6px 0;
+    line-height: 1.1;
+  }
+  .sub{
+    color: var(--ink-soft);
+    font-size: 15px;
+    max-width: 62ch;
+    line-height: 1.5;
+    margin: 0;
+  }
+  .layout{
+    display: flex;
+    gap: 28px;
+    align-items: flex-start;
+    margin-top: 26px;
+  }
+  @media (max-width: 800px){
+    .layout{ flex-direction: column; }
+  }
+  .board-col{
+    flex: 1 1 560px;
+    min-width: 0;
+  }
+  .side-col{
+    flex: 0 0 300px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  @media (max-width: 800px){
+    .side-col{ flex: 1 1 auto; width: 100%; }
+  }
+
+  /* Board */
+  .board-shell{
+    background: linear-gradient(160deg, var(--wood-dark), var(--wood-light));
+    padding: 14px;
+    border-radius: 10px;
+    box-shadow: inset 0 0 0 1px var(--wood-line), 0 10px 26px -14px rgba(0,0,0,0.45);
+  }
+  .board-inner{
+    display: flex;
+  }
+  .rank-labels{
+    display: flex;
+    flex-direction: column;
+    justify-content: space-around;
+    padding: 2px 6px 2px 0;
+    font-size: 12px;
+    color: var(--bg-soft);
+    font-weight: 600;
+  }
+  .rank-labels span, .file-labels span{
+    flex: 1;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  }
+  .board-main{ flex: 1; min-width: 0; }
+  .board{
+    display: grid;
+    grid-template-columns: repeat(9, 1fr);
+    grid-template-rows: repeat(9, 1fr);
+    width: 100%;
+    aspect-ratio: 1;
+    border-radius: 4px;
+    overflow: hidden;
+    box-shadow: 0 0 0 2px var(--wood-line);
+  }
+  .file-labels{
+    display: flex;
+    padding: 6px 0 0 0;
+    font-size: 12px;
+    color: var(--bg-soft);
+    font-weight: 600;
+  }
+  .cell{
+    position: relative;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    aspect-ratio: 1;
+    cursor: default;
+    user-select:none;
+  }
+  .cell.light{ background: var(--wood-light); }
+  .cell.dark{ background: var(--wood-dark); }
+  .cell.goal::before{
+    content:"";
+    position:absolute;
+    inset: 8%;
+    border-radius: 50%;
+    border: 2px dashed var(--goal);
+    opacity: 0.75;
+    pointer-events:none;
+  }
+  .cell.selectable{ cursor: pointer; }
+  .cell.selected{
+    box-shadow: inset 0 0 0 3px var(--gold);
+  }
+  .cell .hint{
+    position:absolute;
+    width: 28%;
+    height: 28%;
+    border-radius: 50%;
+    background: var(--gold);
+    opacity: 0.55;
+    pointer-events:none;
+  }
+  .cell .hint.capture{
+    width: 74%;
+    height: 74%;
+    background: transparent;
+    border: 3px solid var(--danger);
+    opacity: 0.8;
+  }
+  .piece{
+    width: 78%;
+    height: 78%;
+    border-radius: 50%;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size: min(4.4vw, 26px);
+    position: relative;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.28), inset 0 0 0 2px rgba(255,255,255,0.18);
+    cursor: pointer;
+    transition: transform 0.12s ease;
+  }
+  .piece.p1{ background: radial-gradient(circle at 32% 28%, #d5675a, var(--p1)); }
+  .piece.p2{ background: radial-gradient(circle at 32% 28%, #3d7d92, var(--p2)); }
+  .piece.dim{ cursor: default; }
+  .piece:active{ transform: scale(0.94); }
+  .piece .glyph{
+    filter: drop-shadow(0 1px 1px rgba(0,0,0,0.35));
+  }
+  .cell.a1, .cell.i9{ position: relative; }
+  .corner-tag{
+    position:absolute;
+    bottom: 2px;
+    right: 3px;
+    font-size: 8px;
+    letter-spacing: 0.03em;
+    color: var(--goal);
+    font-weight: 800;
+    opacity: 0.85;
+    pointer-events:none;
+  }
+
+  /* Sidebar */
+  .card{
+    background: var(--card-bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 16px 18px;
+  }
+  .turn-card{
+    display:flex;
+    align-items:center;
+    gap: 12px;
+  }
+  .turn-dot{
+    width: 16px; height:16px; border-radius:50%;
+    flex: 0 0 auto;
+  }
+  .turn-dot.p1{ background: var(--p1); }
+  .turn-dot.p2{ background: var(--p2); }
+  .turn-text .label{
+    font-size: 12px;
+    color: var(--ink-soft);
+    margin: 0 0 2px 0;
+  }
+  .turn-text .name{
+    font-family:'Fraunces', serif;
+    font-weight: 600;
+    font-size: 19px;
+    margin: 0;
+  }
+  .goal-note{
+    font-size: 12.5px;
+    color: var(--ink-soft);
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--line);
+    line-height: 1.5;
+  }
+
+  .counts-card h2, .rules-card h2{
+    font-family:'Fraunces', serif;
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0 0 12px 0;
+  }
+  .count-row{
+    display:flex;
+    align-items:center;
+    gap: 10px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .count-row:last-child{ border-bottom:none; }
+  .count-row .pgroup{ display:flex; gap:6px; flex:1; }
+  .mini-piece{
+    width: 30px; height: 30px;
+    border-radius: 50%;
+    display:flex;align-items:center;justify-content:center;
+    font-size: 15px;
+    flex-direction: column;
+    position: relative;
+  }
+  .mini-piece.p1{ background: var(--p1-soft); }
+  .mini-piece.p2{ background: var(--p2-soft); }
+  .mini-piece .n{
+    position:absolute;
+    bottom:-7px;
+    right:-4px;
+    background: var(--ink);
+    color: var(--bg-soft);
+    font-size: 10px;
+    font-weight:700;
+    border-radius: 8px;
+    min-width: 16px;
+    text-align:center;
+    padding: 0 3px;
+    line-height: 15px;
+  }
+  .mini-piece.zero{ opacity: 0.35; }
+  .mini-piece .n.zero-n{ background: var(--danger); }
+
+  details.rules-card summary{
+    font-family:'Fraunces', serif;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    list-style: none;
+  }
+  details.rules-card summary::-webkit-details-marker{ display:none; }
+  details.rules-card summary::after{
+    content: "▾";
+    float: right;
+    color: var(--ink-soft);
+    transition: transform 0.15s ease;
+  }
+  details.rules-card[open] summary::after{ transform: rotate(180deg); }
+  .rules-body{
+    margin-top: 12px;
+    font-size: 13.5px;
+    line-height: 1.6;
+    color: var(--ink-soft);
+  }
+  .rules-body p{ margin: 0 0 10px 0; }
+  .rules-body ul{ margin: 0 0 10px 0; padding-left: 18px; }
+  .rules-body strong{ color: var(--ink); }
+  .rules-body .rps-row{
+    display:flex; gap:10px; align-items:center; margin: 8px 0 12px 0; flex-wrap: wrap;
+  }
+  .rps-chip{
+    display:flex; align-items:center; gap:5px;
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    padding: 4px 10px 4px 6px;
+    font-size: 12.5px;
+    color: var(--ink);
+  }
+
+  button.restart{
+    width:100%;
+    padding: 11px 14px;
+    border-radius: 6px;
+    border: none;
+    background: var(--ink);
+    color: var(--bg-soft);
+    font-family: 'Be Vietnam Pro', sans-serif;
+    font-weight: 700;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  button.restart:hover{ opacity: 0.9; }
+
+  /* Overlay */
+  .overlay{
+    position: fixed;
+    inset: 0;
+    background: rgba(20,15,8,0.62);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    z-index: 50;
+    padding: 20px;
+  }
+  .overlay[hidden]{ display:none; }
+  .win-card{
+    background: var(--card-bg);
+    border-radius: 10px;
+    padding: 32px 30px;
+    max-width: 380px;
+    text-align: center;
+    box-shadow: 0 20px 50px -12px rgba(0,0,0,0.5);
+  }
+  .win-card .badge{
+    width: 58px; height:58px; border-radius:50%;
+    margin: 0 auto 14px auto;
+    display:flex; align-items:center; justify-content:center;
+    font-size: 28px;
+  }
+  .win-card h3{
+    font-family:'Fraunces', serif;
+    font-size: 24px;
+    margin: 0 0 8px 0;
+  }
+  .win-card p{
+    color: var(--ink-soft);
+    font-size: 14px;
+    margin: 0 0 20px 0;
+    line-height: 1.5;
+  }
+
+  .toolbar{
+    display:flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+    font-size: 12.5px;
+    color: var(--ink-soft);
+  }
+  .toolbar button{
+    background: none;
+    border: 1px solid var(--line);
+    color: var(--ink-soft);
+    padding: 5px 10px;
+    border-radius: 5px;
+    font-size: 12px;
+    cursor: pointer;
+    font-family:'Be Vietnam Pro', sans-serif;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <p class="eyebrow">Trò chơi hai người · bàn cờ 9×9</p>
+    <h1>Oẳn Tù Tì Cửu Cung Chiến</h1>
+  </header>
+
+  <div class="layout">
+    <div class="board-col">
+      <div class="toolbar">
+        <button id="deselectBtn" hidden>Bỏ chọn</button>
+      </div>
+      <div class="board-shell">
+        <div class="board-inner">
+          <div class="rank-labels" id="rankLabels"></div>
+          <div class="board-main">
+            <div class="board" id="board"></div>
+            <div class="file-labels" id="fileLabels"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="side-col">
+      <div class="card turn-card">
+        <div class="turn-dot p1" id="turnDot"></div>
+        <div class="turn-text">
+          <p class="label">Đang đến lượt</p>
+          <p class="name" id="turnName">Đỏ</p>
+        </div>
+      </div>
+
+      <details class="rules-card card">
+        <summary>Luật chơi OTTv2</summary>
+        <div class="rules-body">
+          <p><strong>Di chuyển:</strong> mỗi quân đi 1 ô theo 8 hướng quanh nó, giống quân Vua trong cờ vua — không được đi xa hơn, không nhảy qua quân khác.</p>
+          <p><strong>Ăn quân theo oẳn tù tì:</strong></p>
+          <div class="rps-row">
+            <span class="rps-chip">✊ Búa &nbsp;thắng&nbsp; ✌️ Kéo</span>
+            <span class="rps-chip">✌️ Kéo &nbsp;thắng&nbsp; 🖐️ Bao</span>
+            <span class="rps-chip">🖐️ Bao &nbsp;thắng&nbsp; ✊ Búa</span>
+          </div>
+          <ul>
+            <li>Quân của bạn chỉ được đi vào ô có quân địch nếu loại quân đó <strong>thắng</strong> loại quân địch — quân địch bị ăn, quân bạn chiếm ô.</li>
+            <li>Hai quân <strong>cùng loại</strong> (dù khác màu) không ăn được nhau — chỉ đứng chặn đường, không thể đi vào ô của nhau.</li>
+            <li>Không được tự đi vào ô có quân địch mạnh hơn loại của mình — nước đi đó không hợp lệ.</li>
+          </ul>
+          <p><strong>Thắng cuộc</strong> khi xảy ra một trong hai điều:</p>
+          <ul>
+            <li>Ăn sạch hoàn toàn một loại quân bất kỳ của đối phương.</li>
+            <li>Đưa một quân của mình vào ô góc <strong>a1</strong> hoặc <strong>i9</strong>.</li>
+          </ul>
+        </div>
+      </details>
+
+      <button class="restart" id="restartBtn">Chơi lại</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="overlay" hidden>
+  <div class="win-card">
+    <div class="badge" id="winBadge"></div>
+    <h3 id="winTitle">Đỏ thắng!</h3>
+    <p id="winReason">Đã ăn sạch quân Kéo của đối phương.</p>
+    <button class="restart" id="restartBtn2">Chơi lại</button>
+  </div>
+</div>
+
+<script>
+(function(){
+  const FILES = ['a','b','c','d','e','f','g','h','i'];
+  const TYPES = ['rock','paper','scissors'];
+  const GLYPH = { rock:'✊', paper:'🖐️', scissors:'✌️' };
+  const NAME  = { rock:'Búa', paper:'Bao', scissors:'Kéo' };
+  const PNAME = { 1:'Đỏ', 2:'Lam' };
+
+  function beats(a,b){
+    return (a==='rock'&&b==='scissors') || (a==='scissors'&&b==='paper') || (a==='paper'&&b==='rock');
+  }
+
+  let board, turn, selected, gameOver, winner, winReason;
+
+  function freshBoard(){
+    const b = Array.from({length:9}, () => Array(9).fill(null));
+    const patA = ['rock','paper','scissors','rock','paper','scissors','rock','paper','scissors'];
+    const patB = ['paper','scissors','rock','paper','scissors','rock','paper','scissors','rock'];
+    for (let c=0;c<9;c++){
+      b[0][c] = { player:1, type: patA[c] };
+      b[1][c] = { player:1, type: patB[c] };
+      b[8][c] = { player:2, type: patA[c] };
+      b[7][c] = { player:2, type: patB[c] };
+    }
+    return b;
+  }
+
+  function resetGame(){
+    board = freshBoard();
+    turn = 1;
+    selected = null;
+    gameOver = false;
+    winner = null;
+    winReason = '';
+    hideOverlay();
+    render();
+  }
+
+  function inBounds(r,c){ return r>=0 && r<9 && c>=0 && c<9; }
+
+  function legalMoves(r,c){
+    const piece = board[r][c];
+    if (!piece) return [];
+    const moves = [];
+    for (let dr=-1; dr<=1; dr++){
+      for (let dc=-1; dc<=1; dc++){
+        if (dr===0 && dc===0) continue;
+        const nr=r+dr, nc=c+dc;
+        if (!inBounds(nr,nc)) continue;
+        const target = board[nr][nc];
+        if (!target){
+          moves.push({r:nr,c:nc,capture:false});
+        } else if (target.player !== piece.player && beats(piece.type, target.type)){
+          moves.push({r:nr,c:nc,capture:true});
+        }
+      }
+    }
+    return moves;
+  }
+
+  function countPieces(player){
+    const counts = { rock:0, paper:0, scissors:0 };
+    for (let r=0;r<9;r++) for (let c=0;c<9;c++){
+      const p = board[r][c];
+      if (p && p.player===player) counts[p.type]++;
+    }
+    return counts;
+  }
+
+  function doMove(r,c,nr,nc){
+    const piece = board[r][c];
+    const target = board[nr][nc];
+    const capturedType = target ? target.type : null;
+    const capturedPlayer = target ? target.player : null;
+
+    board[nr][nc] = piece;
+    board[r][c] = null;
+
+    let ended = false;
+
+    if (capturedType){
+      const remaining = countPieces(capturedPlayer);
+      if (remaining[capturedType] === 0){
+        gameOver = true; winner = piece.player; ended = true;
+        winReason = `Đã ăn sạch quân ${NAME[capturedType]} của ${PNAME[capturedPlayer]}.`;
+      }
+    }
+    if (!ended && ((nr===0 && nc===0) || (nr===8 && nc===8))){
+      const cell = nr===0 && nc===0 ? 'a1' : 'i9';
+      gameOver = true; winner = piece.player; ended = true;
+      winReason = `Đã đưa quân ${NAME[piece.type]} vào ô ${cell}.`;
+    }
+
+    selected = null;
+    if (!gameOver) turn = turn === 1 ? 2 : 1;
+    render();
+    if (gameOver) showOverlay();
+  }
+
+  function handleCellClick(r,c){
+    if (gameOver) return;
+    const piece = board[r][c];
+
+    if (selected){
+      if (selected.r===r && selected.c===c){
+        selected = null; render(); return;
+      }
+      const moves = legalMoves(selected.r, selected.c);
+      const move = moves.find(m => m.r===r && m.c===c);
+      if (move){
+        doMove(selected.r, selected.c, r, c);
+        return;
+      }
+    }
+
+    if (piece && piece.player === turn){
+      selected = { r, c };
+      render();
+    } else if (!piece || piece.player !== turn){
+      if (selected){ selected = null; render(); }
+    }
+  }
+
+  // ---- Rendering ----
+  const boardEl = document.getElementById('board');
+  const rankLabelsEl = document.getElementById('rankLabels');
+  const fileLabelsEl = document.getElementById('fileLabels');
+  const hintText = document.getElementById('hintText');
+  const deselectBtn = document.getElementById('deselectBtn');
+
+  for (let i=9;i>=1;i--){
+    const s = document.createElement('span');
+    s.textContent = i;
+    rankLabelsEl.appendChild(s);
+  }
+  for (let i=0;i<9;i++){
+    const s = document.createElement('span');
+    s.textContent = FILES[i];
+    fileLabelsEl.appendChild(s);
+  }
+
+  function render(){
+    boardEl.innerHTML = '';
+    const legal = selected ? legalMoves(selected.r, selected.c) : [];
+
+    for (let displayRow=8; displayRow>=0; displayRow--){
+      for (let c=0;c<9;c++){
+        const r = displayRow;
+        const cellEl = document.createElement('div');
+        const isLight = (r+c) % 2 === 0;
+        cellEl.className = 'cell ' + (isLight ? 'light':'dark');
+        if (r===0 && c===0) cellEl.classList.add('goal','a1');
+        if (r===8 && c===8) cellEl.classList.add('goal','i9');
+        if (selected && selected.r===r && selected.c===c) cellEl.classList.add('selected');
+
+        const moveHere = legal.find(m => m.r===r && m.c===c);
+        if (moveHere){
+          const hint = document.createElement('div');
+          hint.className = 'hint' + (moveHere.capture ? ' capture' : '');
+          cellEl.appendChild(hint);
+          cellEl.classList.add('selectable');
+        }
+
+        if ((r===0&&c===0) || (r===8&&c===8)){
+          const tag = document.createElement('span');
+          tag.className = 'corner-tag';
+          tag.textContent = (r===0&&c===0) ? 'a1' : 'i9';
+          cellEl.appendChild(tag);
+        }
+
+        const piece = board[r][c];
+        if (piece){
+          const pieceEl = document.createElement('div');
+          pieceEl.className = 'piece p' + piece.player + (piece.player!==turn ? ' dim' : '');
+          const glyph = document.createElement('span');
+          glyph.className = 'glyph';
+          glyph.textContent = GLYPH[piece.type];
+          pieceEl.appendChild(glyph);
+          pieceEl.title = PNAME[piece.player] + ' · ' + NAME[piece.type];
+          cellEl.appendChild(pieceEl);
+        }
+
+        if (!gameOver){
+          cellEl.addEventListener('click', () => handleCellClick(r,c));
+        }
+        boardEl.appendChild(cellEl);
+      }
+    }
+
+    document.getElementById('turnDot').className = 'turn-dot p' + turn;
+    document.getElementById('turnName').textContent = PNAME[turn];
+
+    renderCounts(1, document.getElementById('p1Counts'));
+    renderCounts(2, document.getElementById('p2Counts'));
+
+    if (selected){
+      hintText.textContent = 'Chạm ô đích, hoặc chạm lại quân để bỏ chọn.';
+      deselectBtn.hidden = false;
+    } else {
+      hintText.textContent = gameOver ? 'Ván đấu đã kết thúc.' : `Đến lượt ${PNAME[turn]} — chọn một quân để đi.`;
+      deselectBtn.hidden = true;
+    }
+  }
+
+  function renderCounts(player, el){
+    el.innerHTML = '';
+    const counts = countPieces(player);
+    TYPES.forEach(t => {
+      const mp = document.createElement('div');
+      mp.className = 'mini-piece p' + player + (counts[t]===0 ? ' zero' : '');
+      const g = document.createElement('span');
+      g.textContent = GLYPH[t];
+      mp.appendChild(g);
+      const n = document.createElement('span');
+      n.className = 'n' + (counts[t]===0 ? ' zero-n' : '');
+      n.textContent = counts[t];
+      mp.appendChild(n);
+      mp.title = NAME[t];
+      el.appendChild(mp);
+    });
+  }
+
+  // ---- Overlay ----
+  const overlay = document.getElementById('overlay');
+  function showOverlay(){
+    document.getElementById('winBadge').textContent = winner===1 ? '✊' : '🖐️';
+    document.getElementById('winBadge').style.background = winner===1 ? 'var(--p1-soft)' : 'var(--p2-soft)';
+    document.getElementById('winTitle').textContent = `${PNAME[winner]} thắng!`;
+    document.getElementById('winReason').textContent = winReason;
+    overlay.hidden = false;
+  }
+  function hideOverlay(){ overlay.hidden = true; }
+
+  deselectBtn.addEventListener('click', () => { selected = null; render(); });
+  document.getElementById('restartBtn').addEventListener('click', resetGame);
+  document.getElementById('restartBtn2').addEventListener('click', resetGame);
+
+  resetGame();
+})();
+</script>
+</body>
+</html>
