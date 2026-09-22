@@ -591,7 +591,7 @@ function renderBoard(table, acting, mark) {
     if (piece) {
       pieceEl.hidden = false;
       pieceEl.textContent = GLYPH[piece.type];
-      pieceEl.className = 'piece p' + piece.player + (piece.player !== table.turn ? ' dim' : '');
+      pieceEl.className = 'piece p' + piece.player;
       pieceEl.title = `${PLAYER_NAME[piece.player]} · ${PIECE_NAME[piece.type]}`;
     } else {
       // A square a piece just moved away from must not keep showing its old

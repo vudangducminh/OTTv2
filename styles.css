@@ -11,6 +11,8 @@
   --board: #dbe5df;
   --board-dark: #c3d2c8;
   --win: #f0c96b;
+  --corner-a1: #daa997;
+  --corner-i9: #94b0b7;
 }
 
 * { box-sizing: border-box; }
@@ -110,8 +112,11 @@ h2 { margin-bottom: 8px; font-size: 2.2rem; line-height: 1; font-weight: 400; }
 .file-labels span { flex: 1; text-align: center; }
 
 .board { display: grid; grid-template-columns: repeat(9, 1fr); grid-template-rows: repeat(9, 1fr); gap: 1px; aspect-ratio: 1; background: var(--line); border: 1px solid var(--line); }
-/* Cells are disabled whenever it is not your move, so they keep full contrast. */
+/* Cells are disabled whenever it is not your move (blocks clicks), but stay at
+   full opacity regardless — the site-wide `button:disabled` dimming would
+   otherwise wash out the entire board after every single move. */
 .cell { position: relative; min-width: 0; padding: 0; border: 0; background: var(--board); display: flex; align-items: center; justify-content: center; opacity: 1; transition: background 160ms ease; }
+.cell:disabled { opacity: 1; }
 .cell.dark { background: var(--board-dark); }
 .cell:enabled.selectable:hover { background: #c3d5cc; }
 .cell.selected { box-shadow: inset 0 0 0 3px var(--win); }
@@ -119,9 +124,10 @@ h2 { margin-bottom: 8px; font-size: 2.2rem; line-height: 1; font-weight: 400; }
 /* a1 is Đỏ's (player 1, orange) home corner and i9 is Lam's (player 2, blue) —
    tinting each with its player's color makes the corner win-condition legible
    at a glance, without matching the pieces' own fully-saturated fill so a
-   piece sitting on its own color corner still stands out. */
-.cell.corner-a1 { background: color-mix(in srgb, var(--accent) 45%, var(--board)); }
-.cell.corner-i9 { background: color-mix(in srgb, var(--blue) 45%, var(--board)); }
+   piece sitting on its own color corner still stands out. Plain hex values,
+   not color-mix(), so this doesn't silently no-op on a browser that lacks it. */
+.cell.corner-a1 { background: var(--corner-a1); }
+.cell.corner-i9 { background: var(--corner-i9); }
 .corner-tag { position: absolute; bottom: 1px; right: 2px; font: 700 0.5rem Arial, sans-serif; color: var(--muted); letter-spacing: 0.02em; pointer-events: none; }
 
 .hint { position: absolute; width: 26%; height: 26%; border-radius: 50%; background: var(--win); opacity: 0.75; pointer-events: none; }
@@ -130,7 +136,6 @@ h2 { margin-bottom: 8px; font-size: 2.2rem; line-height: 1; font-weight: 400; }
 .piece { width: 78%; height: 78%; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: clamp(0.65rem, 2.6vw, 1.3rem); line-height: 1; box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.35); pointer-events: none; }
 .piece.p1 { background: var(--accent); }
 .piece.p2 { background: var(--blue); }
-.piece.dim { opacity: 0.55; }
 /* `.piece` sets its own `display: flex`, which otherwise beats the browser's
    built-in `[hidden] { display: none }` rule at equal specificity (author
    styles always win over the UA stylesheet) — so a piece that moved away
