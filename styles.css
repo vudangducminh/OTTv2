@@ -1,0 +1,126 @@
+:root {
+  color-scheme: light;
+  --ink: #18231f;
+  --muted: #65736d;
+  --paper: #f4f0e8;
+  --panel: #fffdf8;
+  --line: #d7d8ce;
+  --accent: #d95f3f;
+  --accent-dark: #a8412b;
+  --blue: #3d6f87;
+  --board: #dbe5df;
+  --board-filled: #e8ded0;
+  --win: #f0c96b;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: radial-gradient(circle at 90% 0%, #d9e5dd 0 18%, transparent 42%), var(--paper);
+  color: var(--ink);
+  font-family: Georgia, 'Times New Roman', serif;
+}
+
+button, a, input { font: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: default; opacity: 0.45; }
+
+.shell { width: min(1080px, calc(100% - 40px)); margin: 0 auto; padding: 64px 0 80px; }
+.masthead { max-width: 700px; margin-bottom: 32px; }
+.eyebrow { margin: 0 0 12px; color: var(--accent-dark); font: 700 0.72rem/1.2 Arial, sans-serif; letter-spacing: 0.12em; }
+h1, h2, p { margin-top: 0; }
+h1 { margin-bottom: 14px; font-size: clamp(3.5rem, 9vw, 7rem); line-height: 0.9; font-weight: 400; letter-spacing: -0.04em; }
+h2 { margin-bottom: 8px; font-size: 2.2rem; line-height: 1; font-weight: 400; }
+.lede { max-width: 500px; color: var(--muted); font-size: 1.15rem; line-height: 1.5; }
+.muted { color: var(--muted); font: 0.9rem/1.4 Arial, sans-serif; }
+
+.identity { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 26px; }
+.identity label { color: var(--muted); font: 0.8rem Arial, sans-serif; text-transform: uppercase; letter-spacing: 0.08em; }
+.identity input { width: 180px; padding: 8px 10px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
+.identity input:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+
+.notice { margin: 0 0 20px; padding: 12px 16px; border-left: 4px solid var(--accent); background: #fdeee9; font: 0.9rem Arial, sans-serif; }
+
+.panel { padding: 28px; background: var(--panel); border: 1px solid var(--line); box-shadow: 8px 8px 0 #d9ded7; }
+.section-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 20px; }
+
+.primary, .secondary { border: 1px solid var(--ink); padding: 11px 15px; }
+.primary { background: var(--accent); color: white; }
+.primary:hover:not(:disabled) { background: var(--accent-dark); }
+.secondary { background: transparent; color: var(--ink); }
+.secondary:hover:not(:disabled) { background: #e7ece5; }
+.danger { border-color: var(--accent-dark); color: var(--accent-dark); }
+.danger:hover:not(:disabled) { background: #fdeee9; }
+
+/* lobby ------------------------------------------------------------------- */
+.tables { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 22px; margin-top: 24px; }
+.table-card { display: flex; flex-direction: column; gap: 12px; padding: 16px; border: 1px solid var(--line); background: var(--paper); }
+.table-card.mine { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+
+.mini-board {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  padding: 4px;
+  aspect-ratio: 1;
+  border: 1px solid var(--line);
+  background: var(--line);
+  transition: transform 140ms ease, box-shadow 140ms ease;
+}
+.mini-board:hover { transform: translateY(-3px); box-shadow: 4px 6px 0 #d9ded7; }
+.mini-board:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.mini-board span {
+  display: grid;
+  place-items: center;
+  background: var(--board);
+  color: var(--ink);
+  font-size: clamp(1.1rem, 4vw, 1.7rem);
+  line-height: 1;
+}
+.mini-board span.win { background: var(--win); }
+
+.table-meta { display: grid; gap: 4px; }
+.table-meta strong { font-size: 1.15rem; font-weight: 400; }
+.card-state { color: var(--accent-dark); font: 700 0.75rem Arial, sans-serif; text-transform: uppercase; letter-spacing: 0.06em; }
+.card-seats { color: var(--muted); font: 0.78rem/1.4 Arial, sans-serif; }
+.card-actions { display: flex; gap: 8px; margin-top: auto; }
+.card-actions button { flex: 1; padding: 9px 10px; font-size: 0.85rem; }
+
+/* table ------------------------------------------------------------------- */
+.game-layout { display: grid; grid-template-columns: minmax(260px, 0.8fr) minmax(320px, 1fr); align-items: start; gap: clamp(32px, 6vw, 80px); }
+.back-link { display: inline-block; margin-bottom: 40px; padding: 0; border: 0; background: none; color: var(--blue); font: 0.85rem Arial, sans-serif; }
+.back-link:hover { text-decoration: underline; }
+.status { color: var(--accent-dark); font: 700 0.85rem Arial, sans-serif; }
+
+.seats { display: grid; gap: 8px; margin: 18px 0; padding: 0; list-style: none; }
+.seat { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); background: var(--panel); }
+.seat-mark { display: grid; place-items: center; width: 30px; height: 30px; background: var(--board); font-size: 1.1rem; }
+.seat-name { flex: 1; }
+.seat-tag { color: var(--muted); font: 0.72rem Arial, sans-serif; text-transform: uppercase; letter-spacing: 0.08em; }
+.seat-empty .seat-name { color: var(--muted); font-style: italic; }
+.seat-turn { border-color: var(--accent); }
+.seat-turn .seat-mark { background: var(--accent); color: white; }
+
+.table-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+.table-actions button { font-size: 0.85rem; }
+
+.board-wrap { width: min(100%, 520px); }
+.board { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; aspect-ratio: 1; }
+/* Cells are disabled whenever it is not your move, so they keep full contrast. */
+.cell { min-width: 0; border: 0; background: var(--board); color: var(--ink); font-size: clamp(3rem, 11vw, 6rem); line-height: 1; opacity: 1; transition: background 160ms ease, transform 160ms ease; }
+.cell:enabled:hover { background: #c3d5cc; transform: translateY(-3px); }
+.cell.filled { background: var(--board-filled); }
+.cell.win { background: var(--win); }
+.board-note { margin: 14px 0 0; color: var(--muted); font: 0.78rem/1.5 Arial, sans-serif; }
+
+@media (max-width: 700px) {
+  .shell { width: min(100% - 28px, 560px); padding-top: 36px; }
+  .panel { padding: 20px; box-shadow: 5px 5px 0 #d9ded7; }
+  .section-heading { align-items: stretch; flex-direction: column; }
+  .tables { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
+  .game-layout { grid-template-columns: 1fr; gap: 30px; }
+  .back-link { margin-bottom: 24px; }
+  .table-actions button { flex: 1; }
+}

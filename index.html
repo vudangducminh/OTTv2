@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OTTv2 Board Hall</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="masthead">
+      <p class="eyebrow">OTTv2 / PLAYHTML BOARD HALL</p>
+      <h1>Board hall</h1>
+      <p class="lede">Open a table, take one of the two seats, and let everyone else watch. Click any board to pull up a chair.</p>
+      <div class="identity">
+        <label for="player-name">You are</label>
+        <input id="player-name" maxlength="24" autocomplete="off" spellcheck="false">
+        <span id="hall-count" class="muted"></span>
+      </div>
+    </header>
+
+    <p id="notice" class="notice" hidden></p>
+
+    <section id="lobby" class="panel">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">LIVE TABLES</p>
+          <h2>Pick a board</h2>
+        </div>
+        <button id="open-table" class="primary" type="button">Open a table</button>
+      </div>
+      <p id="lobby-status" class="muted">Connecting to the hall...</p>
+      <div id="tables" class="tables"></div>
+    </section>
+
+    <section id="table" class="game-layout" hidden>
+      <div class="game-copy">
+        <button id="back-to-hall" class="back-link" type="button">&larr; Back to hall</button>
+        <p class="eyebrow">TABLE <span id="table-id"></span></p>
+        <h2 id="table-state">Tic-Tac-Toe</h2>
+        <p id="table-role" class="status"></p>
+        <ul id="seats" class="seats"></ul>
+        <p id="table-watchers" class="muted"></p>
+        <div class="table-actions">
+          <button id="seat-action" class="primary" type="button">Take a seat</button>
+          <button id="rematch" class="secondary" type="button">Rematch</button>
+          <button id="copy-link" class="secondary" type="button">Copy watch link</button>
+          <button id="close-table" class="secondary danger" type="button">Close table</button>
+        </div>
+      </div>
+      <div class="board-wrap">
+        <div id="board" class="board" role="group" aria-label="Tic-tac-toe board"></div>
+        <p id="board-note" class="board-note"></p>
+      </div>
+    </section>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
