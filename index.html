@@ -37,10 +37,19 @@
       <div class="game-copy">
         <button id="back-to-hall" class="back-link" type="button">&larr; Back to hall</button>
         <p class="eyebrow">TABLE <span id="table-id"></span></p>
-        <h2 id="table-state">Tic-Tac-Toe</h2>
+        <h2 id="table-state">OTTv2</h2>
         <p id="table-role" class="status"></p>
         <ul id="seats" class="seats"></ul>
+        <div id="counts" class="counts"></div>
         <p id="table-watchers" class="muted"></p>
+        <details class="rules-note">
+          <summary>Luật chơi</summary>
+          <div>
+            <p>Mỗi quân đi 1 ô theo 8 hướng quanh nó, như quân Vua trong cờ vua.</p>
+            <p>✊ Búa thắng ✌️ Kéo · ✌️ Kéo thắng 🖐️ Bao · 🖐️ Bao thắng ✊ Búa. Chỉ được đi vào ô quân địch nếu loại quân bạn thắng loại quân địch đó; quân cùng loại chặn nhau, không ăn được.</p>
+            <p>Thắng khi ăn sạch một loại quân bất kỳ của đối phương, hoặc đưa một quân của mình vào ô góc a1 hoặc i9.</p>
+          </div>
+        </details>
         <div class="table-actions">
           <button id="seat-action" class="primary" type="button">Take a seat</button>
           <button id="rematch" class="secondary" type="button">Rematch</button>
@@ -49,7 +58,14 @@
         </div>
       </div>
       <div class="board-wrap">
-        <div id="board" class="board" role="group" aria-label="Tic-tac-toe board"></div>
+        <div class="board-frame">
+          <div id="rank-labels" class="rank-labels"></div>
+          <div class="board-main">
+            <div id="board" class="board" role="group" aria-label="Oẳn tù tì board"></div>
+            <div id="file-labels" class="file-labels"></div>
+          </div>
+        </div>
+        <button id="deselect" class="secondary" type="button" hidden>Bỏ chọn</button>
         <p id="board-note" class="board-note"></p>
       </div>
     </section>

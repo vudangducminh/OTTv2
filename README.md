@@ -1,8 +1,17 @@
 # OTTv2 board hall
 
-A hall of tic-tac-toe tables. Anyone can open a table, two people take its
-seats, and everyone else watches — click any board in the lobby to pull up a
-chair. Multiple tables run at once and every one of them is live in the lobby.
+A hall of **OTTv2** tables — a 9×9 rock-paper-scissors
+chess. Anyone can open a table, two people take its seats, and everyone else
+watches — click any board in the lobby to pull up a chair. Multiple tables run
+at once and every one of them is live in the lobby.
+
+Each side starts with two full ranks of pieces (rock/paper/scissors, repeating).
+A piece steps one square in any of the 8 directions around it, like a chess
+king, and may enter a square held by an enemy piece only if its own type beats
+that piece's type (✊ beats ✌️, ✌️ beats 🖐️, 🖐️ beats ✊) — same-type pieces of
+either color simply block each other. Win by wiping out any one enemy piece
+type entirely, or by walking a piece into the opposing home corner, `a1` or
+`i9`.
 
 ## Run
 
@@ -28,17 +37,27 @@ All the state lives in one playhtml room, `ottv2-hall`, in a single page-data
 channel:
 
 ```js
-const tables = playhtml.createPageData('tables', {});
+const tables = playhtml.createPageData('rps-tables', {});
 
 // tables.getData() === {
 //   "a3f1c2": {
-//     seatX: "<player id>", seatO: null, nameX: "Ada", nameO: null,
-//     cells: { "0": "X", "4": "O" }, turn: "X", winner: null, winLine: null,
+//     seat1: "<player id>", seat2: null, name1: "Ada", name2: null,
+//     cells: { "0": "1r", "4": "2s" },  // "<player><type letter>", e.g. 1=Đỏ rock
+//     turn: 1, winner: null, winKind: null, winType: null, winCell: null,
 //     round: 0, createdAt: …, lastActiveAt: …,
 //   },
 //   …
 // }
 ```
+
+`cells` is keyed `"0"`–`"80"` for the 81 squares (`row * 9 + col`, row 0 = rank
+1). A missing or `null` key means the square is empty — a piece that moves off
+a square is written as `null` there rather than deleted, since only ever
+*setting* keys (never deleting into the nested map) is what keeps this
+CRDT-safe. The channel is named `rps-tables`, not the original hall's `tables`
+— this game's shape (`seat1`/`seat2`, piece codes instead of `X`/`O`) isn't
+compatible with anything that might already be persisted under the old key, so
+it gets a fresh channel instead of migrating old data in place.
 
 One room holding every table is what makes the lobby's live mini-boards possible
 — the lobby and the table view read the same shared object, so a move made at a
@@ -75,6 +94,9 @@ which lets one browser hold both seats and alternate between them.
 
 ## Making it a different game
 
-The rules are four small functions in `app.js` — `newTable`, `evaluate`, `play`
-and `rematch` — plus `CELL_COUNT` and `LINES`. Everything else (the lobby, seats,
-spectating, presence, pruning) is game-agnostic.
+The rules live in a handful of functions in `app.js` — `newTable`, `legalMoves`,
+`move`, `rematch`, plus the small `checkWin`/`countPieces`/`beats` helpers and
+the `BOARD_SIZE`/`CELL_COUNT` constants. Everything else (the lobby, seats,
+spectating, presence, pruning) is game-agnostic. This is itself a replacement of
+an earlier tic-tac-toe version — swapping the game meant swapping exactly this
+layer and nothing else.

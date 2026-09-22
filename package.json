@@ -2,7 +2,7 @@
   "name": "ottv2-game-server",
   "version": "1.0.0",
   "private": true,
-  "description": "A hall of two-player tic-tac-toe tables, synced with playhtml",
+  "description": "A hall of two-player OTTv2 (rock-paper-scissors chess) tables, synced with playhtml",
   "type": "commonjs",
   "scripts": {
     "start": "node server.js"

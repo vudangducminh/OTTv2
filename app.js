@@ -4,9 +4,32 @@ import { playhtml } from 'https://unpkg.com/playhtml@2.14.1';
 // channel keyed by table id. That is what lets the lobby draw each table's real
 // board instead of a summary: the lobby and the table view read the same data.
 const ROOM = 'ottv2-hall';
-const CHANNEL = 'tables';
-const CELL_COUNT = 9;
-const LINES = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6]];
+// Renamed from the tic-tac-toe hall's 'tables' channel: the board shape here
+// (81 keyed squares holding piece codes, seat1/seat2 instead of seatX/seatO)
+// is not compatible with anything already persisted under that key, so this
+// game gets its own fresh channel instead of migrating old data in place.
+const CHANNEL = 'rps-tables';
+
+// ------------------------------------------------------------------ the game
+// OTTv2 — a 9x9 rock-paper-scissors chess. Each side
+// starts with two full ranks of pieces; a piece steps one square in any of 8
+// directions (like a chess king) and may only enter a square held by an enemy
+// piece its own type beats. Win by wiping out any one enemy piece type, or by
+// walking a piece into the opposing home corner (a1 or i9).
+const BOARD_SIZE = 9;
+const CELL_COUNT = BOARD_SIZE * BOARD_SIZE;
+const FILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i'];
+const TYPES = ['rock', 'paper', 'scissors'];
+const TYPE_LETTER = { rock: 'r', paper: 'p', scissors: 's' };
+const LETTER_TYPE = { r: 'rock', p: 'paper', s: 'scissors' };
+const GLYPH = { rock: '✊', paper: '🖐️', scissors: '✌️' };
+const PIECE_NAME = { rock: 'Búa', paper: 'Bao', scissors: 'Kéo' };
+const PLAYER_NAME = { 1: 'Đỏ', 2: 'Lam' };
+const SEAT_LABEL = { 1: 'Đ', 2: 'L' };
+// Row 0 = rank 1 (Đỏ's back rank), row 8 = rank 9 (Lam's back rank).
+const ROW_NEAR = ['rock', 'paper', 'scissors', 'rock', 'paper', 'scissors', 'rock', 'paper', 'scissors'];
+const ROW_FAR = ['paper', 'scissors', 'rock', 'paper', 'scissors', 'rock', 'paper', 'scissors', 'rock'];
+
 const MAX_TABLES = 24;
 const EMPTY_TABLE_TTL = 10 * 60 * 1000;
 const IDLE_TABLE_TTL = 2 * 60 * 60 * 1000;
@@ -29,12 +52,16 @@ const elements = {
   tableState: document.querySelector('#table-state'),
   tableRole: document.querySelector('#table-role'),
   seats: document.querySelector('#seats'),
+  counts: document.querySelector('#counts'),
   tableWatchers: document.querySelector('#table-watchers'),
   seatAction: document.querySelector('#seat-action'),
   rematch: document.querySelector('#rematch'),
   copyLink: document.querySelector('#copy-link'),
   closeTable: document.querySelector('#close-table'),
+  rankLabels: document.querySelector('#rank-labels'),
+  fileLabels: document.querySelector('#file-labels'),
   board: document.querySelector('#board'),
+  deselect: document.querySelector('#deselect'),
   boardNote: document.querySelector('#board-note'),
 };
 
@@ -75,6 +102,11 @@ let currentTableId = new URLSearchParams(window.location.search).get('game');
 const cards = new Map();
 let noticeTimer = null;
 
+// Which square (0-80) the local viewer has picked up, if any. Purely local UI
+// state — never written to shared data, so it never needs to sync and always
+// resets when you switch tables.
+let selectedFrom = null;
+
 function showNotice(message) {
   elements.notice.textContent = message;
   elements.notice.hidden = false;
@@ -82,51 +114,110 @@ function showNotice(message) {
   noticeTimer = window.setTimeout(() => { elements.notice.hidden = true; }, 6000);
 }
 
+// ----------------------------------------------------------------- geometry
+
+function indexOf(row, col) { return row * BOARD_SIZE + col; }
+function rowOf(index) { return Math.floor(index / BOARD_SIZE); }
+function colOf(index) { return index % BOARD_SIZE; }
+
+function encodePiece(player, type) { return `${player}${TYPE_LETTER[type]}`; }
+function decodePiece(code) {
+  if (!code) return null;
+  return { player: Number(code[0]), type: LETTER_TYPE[code[1]] };
+}
+
+function startingCells() {
+  const cells = {};
+  for (let col = 0; col < BOARD_SIZE; col += 1) {
+    cells[String(indexOf(0, col))] = encodePiece(1, ROW_NEAR[col]);
+    cells[String(indexOf(1, col))] = encodePiece(1, ROW_FAR[col]);
+    cells[String(indexOf(8, col))] = encodePiece(2, ROW_NEAR[col]);
+    cells[String(indexOf(7, col))] = encodePiece(2, ROW_FAR[col]);
+  }
+  return cells;
+}
+
 function newTable() {
   return {
     createdAt: Date.now(),
     lastActiveAt: Date.now(),
     round: 0,
-    seatX: null,
-    seatO: null,
-    nameX: null,
-    nameO: null,
-    cells: {},
-    turn: 'X',
+    seat1: null,
+    seat2: null,
+    name1: null,
+    name2: null,
+    cells: startingCells(),
+    turn: 1,
     winner: null,
-    winLine: null,
+    winKind: null, // 'capture' | 'corner'
+    winType: null, // captured piece type, for a 'capture' win
+    winCell: null, // 'a1' | 'i9', for a 'corner' win
   };
 }
 
-// Reads the nine fixed keys instead of enumerating the CRDT proxy, so the same
+// Reads the 81 fixed keys instead of enumerating the CRDT proxy, so the same
 // helper works on a live draft and on a plain snapshot.
-function cellsSnapshot(source) {
+function snapshotCells(source) {
   const cells = {};
   for (let index = 0; index < CELL_COUNT; index += 1) {
-    const mark = source?.[String(index)];
-    if (mark) cells[String(index)] = mark;
+    const code = source?.[String(index)];
+    if (code) cells[String(index)] = code;
   }
   return cells;
 }
 
-function evaluate(cells) {
-  for (const line of LINES) {
-    const [a, b, c] = line;
-    const mark = cells[String(a)];
-    if (mark && mark === cells[String(b)] && mark === cells[String(c)]) {
-      return { winner: mark, winLine: line.join(',') };
+// ------------------------------------------------------------------- rules
+
+function beats(a, b) {
+  return (a === 'rock' && b === 'scissors') || (a === 'scissors' && b === 'paper') || (a === 'paper' && b === 'rock');
+}
+
+function legalMoves(cellsSnap, from) {
+  const piece = decodePiece(cellsSnap[String(from)]);
+  if (!piece) return [];
+  const row = rowOf(from);
+  const col = colOf(from);
+  const moves = [];
+  for (let dr = -1; dr <= 1; dr += 1) {
+    for (let dc = -1; dc <= 1; dc += 1) {
+      if (dr === 0 && dc === 0) continue;
+      const nr = row + dr;
+      const nc = col + dc;
+      if (nr < 0 || nr >= BOARD_SIZE || nc < 0 || nc >= BOARD_SIZE) continue;
+      const to = indexOf(nr, nc);
+      const target = decodePiece(cellsSnap[String(to)]);
+      if (!target) moves.push({ to, capture: false });
+      else if (target.player !== piece.player && beats(piece.type, target.type)) moves.push({ to, capture: true });
     }
   }
-  if (Object.keys(cells).length === CELL_COUNT) return { winner: 'draw', winLine: null };
+  return moves;
+}
+
+function countPieces(cellsSnap, player, type) {
+  let count = 0;
+  for (let index = 0; index < CELL_COUNT; index += 1) {
+    const piece = decodePiece(cellsSnap[String(index)]);
+    if (piece && piece.player === player && piece.type === type) count += 1;
+  }
+  return count;
+}
+
+function checkWin(cellsAfter, mark, to, capturedPiece) {
+  if (capturedPiece && countPieces(cellsAfter, capturedPiece.player, capturedPiece.type) === 0) {
+    return { winner: mark, kind: 'capture', type: capturedPiece.type, cell: null };
+  }
+  if (to === 0 || to === CELL_COUNT - 1) {
+    return { winner: mark, kind: 'corner', type: null, cell: to === 0 ? 'a1' : 'i9' };
+  }
   return null;
 }
 
 function seatsHeld(table) {
   if (!table) return [];
-  return ['X', 'O'].filter((seat) => (seat === 'X' ? table.seatX : table.seatO) === playerId);
+  return [1, 2].filter((seat) => (seat === 1 ? table.seat1 : table.seat2) === playerId);
 }
 
-// The mark this browser may move as right now. Holding both seats is only
+// The player this browser may move as right now. Holding both seats is only
 // reachable in solo mode, where you alternate between them.
 function markFor(table) {
   const held = seatsHeld(table);
@@ -134,23 +225,33 @@ function markFor(table) {
   return held[0] ?? null;
 }
 
-function seatName(table, mark) {
-  return (mark === 'X' ? table.nameX : table.nameO) || 'Open seat';
+function canAct(table, mark) {
+  return Boolean(mark) && !table.winner && isFull(table) && table.turn === mark;
 }
 
-function seatId(table, mark) {
-  return mark === 'X' ? table.seatX : table.seatO;
+function seatName(table, seat) {
+  return (seat === 1 ? table.name1 : table.name2) || 'Open seat';
+}
+
+function seatId(table, seat) {
+  return seat === 1 ? table.seat1 : table.seat2;
 }
 
 function isFull(table) {
-  return Boolean(table.seatX && table.seatO);
+  return Boolean(table.seat1 && table.seat2);
+}
+
+function winReasonText(table) {
+  if (!table.winner) return '';
+  if (table.winKind === 'capture') return `Đã ăn sạch quân ${PIECE_NAME[table.winType]} của đối phương.`;
+  if (table.winKind === 'corner') return `Đã đưa quân vào ô ${table.winCell}.`;
+  return '';
 }
 
 function describe(table) {
-  if (table.winner === 'draw') return 'Draw';
-  if (table.winner) return `${seatName(table, table.winner)} wins`;
+  if (table.winner) return `${seatName(table, table.winner)} thắng`;
   if (!isFull(table)) return 'Waiting for a second player';
-  return `${seatName(table, table.turn)} to move`;
+  return `Đến lượt ${seatName(table, table.turn)}`;
 }
 
 function watcherCounts() {
@@ -179,6 +280,7 @@ function navigate(tableId) {
   const url = tableId ? `?game=${encodeURIComponent(tableId)}` : window.location.pathname;
   window.history.pushState({ tableId }, '', url);
   currentTableId = tableId;
+  selectedFrom = null;
   publishPresence();
   render();
 }
@@ -204,7 +306,7 @@ function pruneTables(draft) {
   for (const id of Object.keys(draft)) {
     const table = draft[id];
     const idle = now - (table?.lastActiveAt ?? table?.createdAt ?? 0);
-    const abandoned = !table?.seatX && !table?.seatO;
+    const abandoned = !table?.seat1 && !table?.seat2;
     if ((abandoned && idle > EMPTY_TABLE_TTL) || idle > IDLE_TABLE_TTL) delete draft[id];
   }
 
@@ -224,14 +326,14 @@ function claimSeat(tableId) {
     if (held.length && !soloMode) { outcome = 'already'; return; }
     if (held.length === 2) { outcome = 'already'; return; }
 
-    if (!table.seatX) {
-      table.seatX = playerId;
-      table.nameX = playerName;
-      outcome = 'X';
-    } else if (!table.seatO) {
-      table.seatO = playerId;
-      table.nameO = playerName;
-      outcome = 'O';
+    if (!table.seat1) {
+      table.seat1 = playerId;
+      table.name1 = playerName;
+      outcome = 1;
+    } else if (!table.seat2) {
+      table.seat2 = playerId;
+      table.name2 = playerName;
+      outcome = 2;
     } else {
       outcome = 'full';
     }
@@ -251,19 +353,23 @@ function leaveSeat(tableId) {
   tables.setData((draft) => {
     const table = draft[tableId];
     if (!table) return;
-    if (table.seatX === playerId) { table.seatX = null; table.nameX = null; }
-    if (table.seatO === playerId) { table.seatO = null; table.nameO = null; }
+    if (table.seat1 === playerId) { table.seat1 = null; table.name1 = null; }
+    if (table.seat2 === playerId) { table.seat2 = null; table.name2 = null; }
     table.lastActiveAt = Date.now();
   });
 }
 
-function play(tableId, index) {
+function move(tableId, from, to) {
   const table = tables.getData()[tableId];
   if (!table) return;
 
   const mark = markFor(table);
-  if (!mark || !isFull(table) || table.winner || table.turn !== mark) return;
-  if (cellsSnapshot(table.cells)[String(index)]) return;
+  if (!canAct(table, mark)) return;
+
+  const cells = snapshotCells(table.cells);
+  const piece = decodePiece(cells[String(from)]);
+  if (!piece || piece.player !== mark) return;
+  if (!legalMoves(cells, from).some((candidate) => candidate.to === to)) return;
 
   tables.setData((draft) => {
     const draftTable = draft[tableId];
@@ -271,18 +377,25 @@ function play(tableId, index) {
 
     // Re-check against the merged draft: the opponent's move may have landed
     // between the read above and this transaction.
-    const cells = cellsSnapshot(draftTable.cells);
-    if (draftTable.winner || draftTable.turn !== mark || cells[String(index)]) return;
+    const liveCells = snapshotCells(draftTable.cells);
+    const livePiece = decodePiece(liveCells[String(from)]);
+    if (draftTable.winner || draftTable.turn !== mark || !livePiece || livePiece.player !== mark) return;
+    if (!legalMoves(liveCells, from).some((candidate) => candidate.to === to)) return;
 
-    draftTable.cells[String(index)] = mark;
-    cells[String(index)] = mark;
+    const capturedPiece = decodePiece(liveCells[String(to)]);
+    const movedCode = liveCells[String(from)];
+    draftTable.cells[String(from)] = null;
+    draftTable.cells[String(to)] = movedCode;
 
-    const result = evaluate(cells);
+    const afterCells = { ...liveCells, [String(from)]: null, [String(to)]: movedCode };
+    const result = checkWin(afterCells, mark, to, capturedPiece);
     if (result) {
       draftTable.winner = result.winner;
-      draftTable.winLine = result.winLine;
+      draftTable.winKind = result.kind;
+      draftTable.winType = result.type;
+      draftTable.winCell = result.cell;
     } else {
-      draftTable.turn = mark === 'X' ? 'O' : 'X';
+      draftTable.turn = mark === 1 ? 2 : 1;
     }
     draftTable.lastActiveAt = Date.now();
   });
@@ -293,11 +406,13 @@ function rematch(tableId) {
     const table = draft[tableId];
     if (!table) return;
     const round = (table.round ?? 0) + 1;
-    table.cells = {};
+    table.cells = startingCells();
     table.round = round;
-    table.turn = round % 2 === 0 ? 'X' : 'O';
+    table.turn = round % 2 === 0 ? 2 : 1;
     table.winner = null;
-    table.winLine = null;
+    table.winKind = null;
+    table.winType = null;
+    table.winCell = null;
     table.lastActiveAt = Date.now();
   });
 }
@@ -310,8 +425,8 @@ function renameEverywhere(name) {
   tables.setData((draft) => {
     for (const id of Object.keys(draft)) {
       const table = draft[id];
-      if (table.seatX === playerId) table.nameX = name;
-      if (table.seatO === playerId) table.nameO = name;
+      if (table.seat1 === playerId) table.name1 = name;
+      if (table.seat2 === playerId) table.name2 = name;
     }
   });
 }
@@ -322,7 +437,11 @@ function buildMiniBoard() {
   const board = document.createElement('button');
   board.type = 'button';
   board.className = 'mini-board';
-  for (let index = 0; index < CELL_COUNT; index += 1) board.append(document.createElement('span'));
+  for (let index = 0; index < CELL_COUNT; index += 1) {
+    const span = document.createElement('span');
+    span.className = (rowOf(index) + colOf(index)) % 2 === 0 ? '' : 'dark';
+    board.append(span);
+  }
   return board;
 }
 
@@ -362,24 +481,25 @@ function createCard(id) {
 }
 
 function updateCard(card, id, table, watchers) {
-  const cells = cellsSnapshot(table.cells);
-  const winning = new Set((table.winLine ?? '').split(',').filter(Boolean));
+  const cells = snapshotCells(table.cells);
 
-  [...card.querySelector('.mini-board').children].forEach((cell, index) => {
-    cell.textContent = cells[String(index)] ?? '';
-    cell.className = winning.has(String(index)) ? 'win' : '';
+  [...card.querySelector('.mini-board').children].forEach((span, index) => {
+    const piece = decodePiece(cells[String(index)]);
+    span.classList.toggle('occupied', Boolean(piece));
+    span.classList.toggle('p1', piece?.player === 1);
+    span.classList.toggle('p2', piece?.player === 2);
   });
 
   const held = seatsHeld(table);
   card.querySelector('strong').textContent = `Table ${id}`;
   card.querySelector('.card-state').textContent = describe(table);
   card.querySelector('.card-seats').textContent =
-    `${seatName(table, 'X')} (X) vs ${seatName(table, 'O')} (O) · ${watchers} watching`;
+    `${seatName(table, 1)} (Đỏ) vs ${seatName(table, 2)} (Lam) · ${watchers} watching`;
   card.classList.toggle('mine', held.length > 0);
 
   const sit = card.querySelector('.sit');
   if (held.length && !(soloMode && held.length === 1)) {
-    sit.textContent = `Your seat (${held.join(' + ')})`;
+    sit.textContent = `Your seat (${held.map((seat) => PLAYER_NAME[seat]).join(' + ')})`;
     sit.disabled = true;
   } else if (isFull(table)) {
     sit.textContent = 'Table full';
@@ -419,7 +539,7 @@ function renderLobby(data, counts) {
 
 function renderSeats(table, connected) {
   const held = seatsHeld(table);
-  elements.seats.replaceChildren(...['X', 'O'].map((seat) => {
+  elements.seats.replaceChildren(...[1, 2].map((seat) => {
     const occupant = seatId(table, seat);
     const away = Boolean(occupant) && !connected.has(occupant);
 
@@ -428,39 +548,89 @@ function renderSeats(table, connected) {
     item.classList.toggle('seat-empty', !occupant);
     item.classList.toggle('seat-turn', !table.winner && isFull(table) && table.turn === seat);
     item.innerHTML = '<span class="seat-mark"></span><span class="seat-name"></span><span class="seat-tag"></span>';
-    item.querySelector('.seat-mark').textContent = seat;
+    item.querySelector('.seat-mark').textContent = SEAT_LABEL[seat];
     item.querySelector('.seat-name').textContent = seatName(table, seat);
     item.querySelector('.seat-tag').textContent = held.includes(seat) ? 'you' : away ? 'away' : '';
     return item;
   }));
 }
 
+function renderCounts(table) {
+  const cells = snapshotCells(table.cells);
+  elements.counts.replaceChildren(...[1, 2].flatMap((player) => TYPES.map((type) => {
+    const count = countPieces(cells, player, type);
+    const chip = document.createElement('span');
+    chip.className = `count-chip p${player}` + (count === 0 ? ' zero' : '');
+    chip.textContent = `${GLYPH[type]} ${count}`;
+    chip.title = `${PLAYER_NAME[player]} · ${PIECE_NAME[type]}`;
+    return chip;
+  })));
+}
+
+function renderBoard(table, acting, mark) {
+  const cells = snapshotCells(table.cells);
+  const moves = acting && selectedFrom !== null ? legalMoves(cells, selectedFrom) : [];
+  const moveMap = new Map(moves.map((candidate) => [candidate.to, candidate.capture]));
+
+  for (const cellEl of elements.board.children) {
+    const index = Number(cellEl.dataset.index);
+    const piece = decodePiece(cells[String(index)]);
+    const hintEl = cellEl.querySelector('.hint');
+    const pieceEl = cellEl.querySelector('.piece');
+
+    cellEl.classList.toggle('selected', selectedFrom === index);
+
+    if (moveMap.has(index)) {
+      hintEl.hidden = false;
+      hintEl.classList.toggle('capture', moveMap.get(index));
+    } else {
+      hintEl.hidden = true;
+      hintEl.classList.remove('capture');
+    }
+
+    if (piece) {
+      pieceEl.hidden = false;
+      pieceEl.textContent = GLYPH[piece.type];
+      pieceEl.className = 'piece p' + piece.player + (piece.player !== table.turn ? ' dim' : '');
+      pieceEl.title = `${PLAYER_NAME[piece.player]} · ${PIECE_NAME[piece.type]}`;
+    } else {
+      pieceEl.hidden = true;
+      pieceEl.title = '';
+    }
+
+    cellEl.classList.toggle('selectable', acting && Boolean((piece && piece.player === mark) || moveMap.has(index)));
+    cellEl.disabled = !acting;
+  }
+}
+
 function renderTable(data, counts) {
   const table = data[currentTableId];
   const mark = markFor(table);
   const held = seatsHeld(table);
-  const cells = cellsSnapshot(table.cells);
-  const winning = new Set((table.winLine ?? '').split(',').filter(Boolean));
-  const canMove = Boolean(mark) && !table.winner && isFull(table) && table.turn === mark;
+  const acting = canAct(table, mark);
+
+  // The selection is local scratch state; drop it the moment it stops making
+  // sense (turn passed, seat lost, the selected piece moved or was captured).
+  if (selectedFrom !== null) {
+    const cells = snapshotCells(table.cells);
+    const piece = decodePiece(cells[String(selectedFrom)]);
+    if (!acting || !piece || piece.player !== mark) selectedFrom = null;
+  }
 
   elements.tableId.textContent = currentTableId;
   elements.tableState.textContent = describe(table);
   elements.tableRole.textContent = held.length
-    ? `You are ${held.join(' and ')}${canMove ? ' · your move' : ''}`
+    ? `You are ${held.map((seat) => PLAYER_NAME[seat]).join(' and ')}${acting ? ' · your move' : ''}`
     : 'Spectating · moves are disabled';
 
   renderSeats(table, connectedPlayerIds());
+  renderCounts(table);
 
   const watchers = counts.get(currentTableId) ?? 0;
   elements.tableWatchers.textContent = `${watchers} ${watchers === 1 ? 'person' : 'people'} at this table`;
 
-  [...elements.board.children].forEach((cell, index) => {
-    const value = cells[String(index)] ?? '';
-    cell.textContent = value;
-    cell.classList.toggle('filled', Boolean(value));
-    cell.classList.toggle('win', winning.has(String(index)));
-    cell.disabled = !canMove || Boolean(value);
-  });
+  renderBoard(table, acting, mark);
+  elements.deselect.hidden = selectedFrom === null;
 
   if (held.length && !(soloMode && held.length === 1)) {
     elements.seatAction.textContent = 'Leave seat';
@@ -478,11 +648,13 @@ function renderTable(data, counts) {
 
   elements.boardNote.textContent = held.length
     ? table.winner
-      ? 'Round over. Start a rematch when you are both ready.'
+      ? `Round over — ${winReasonText(table)}`
       : isFull(table)
         ? 'Every move is shared live with everyone watching this table.'
         : 'Share the watch link — someone still needs to take the other seat.'
-    : 'Spectator view. You see each move as the players make it.';
+    : table.winner
+      ? winReasonText(table)
+      : 'Spectator view. You see each move as the players make it.';
 }
 
 function render() {
@@ -492,6 +664,7 @@ function render() {
   if (currentTableId && !(currentTableId in data)) {
     showNotice('That table is no longer open.');
     currentTableId = null;
+    selectedFrom = null;
     window.history.replaceState({ tableId: null }, '', window.location.pathname);
     publishPresence();
   }
@@ -537,6 +710,81 @@ async function copyText(text) {
   }
 }
 
+function buildLabels() {
+  elements.rankLabels.innerHTML = '';
+  for (let rank = BOARD_SIZE; rank >= 1; rank -= 1) {
+    const span = document.createElement('span');
+    span.textContent = String(rank);
+    elements.rankLabels.append(span);
+  }
+
+  elements.fileLabels.innerHTML = '';
+  for (const file of FILES) {
+    const span = document.createElement('span');
+    span.textContent = file;
+    elements.fileLabels.append(span);
+  }
+}
+
+function buildBoard() {
+  elements.board.innerHTML = '';
+  for (let displayRow = BOARD_SIZE - 1; displayRow >= 0; displayRow -= 1) {
+    for (let col = 0; col < BOARD_SIZE; col += 1) {
+      const index = indexOf(displayRow, col);
+      const cell = document.createElement('button');
+      cell.type = 'button';
+      cell.className = 'cell' + ((displayRow + col) % 2 === 0 ? '' : ' dark');
+      cell.dataset.index = String(index);
+      cell.setAttribute('aria-label', `${FILES[col]}${displayRow + 1}`);
+
+      if (index === 0 || index === CELL_COUNT - 1) {
+        cell.classList.add('goal');
+        const tag = document.createElement('span');
+        tag.className = 'corner-tag';
+        tag.textContent = index === 0 ? 'a1' : 'i9';
+        cell.append(tag);
+      }
+
+      const hint = document.createElement('span');
+      hint.className = 'hint';
+      hint.hidden = true;
+      cell.append(hint);
+
+      const piece = document.createElement('span');
+      piece.className = 'piece';
+      piece.hidden = true;
+      cell.append(piece);
+
+      cell.addEventListener('click', () => handleCellClick(index));
+      elements.board.append(cell);
+    }
+  }
+}
+
+function handleCellClick(index) {
+  const table = tables.getData()[currentTableId];
+  if (!table) return;
+  const mark = markFor(table);
+  if (!canAct(table, mark)) return;
+
+  const cells = snapshotCells(table.cells);
+
+  if (selectedFrom !== null) {
+    if (selectedFrom === index) { selectedFrom = null; render(); return; }
+    const moves = legalMoves(cells, selectedFrom);
+    if (moves.some((candidate) => candidate.to === index)) {
+      const from = selectedFrom;
+      selectedFrom = null;
+      move(currentTableId, from, index);
+      return;
+    }
+  }
+
+  const piece = decodePiece(cells[String(index)]);
+  selectedFrom = piece && piece.player === mark ? index : null;
+  render();
+}
+
 function wireControls() {
   elements.playerName.value = playerName;
   elements.playerName.addEventListener('change', () => {
@@ -555,17 +803,12 @@ function wireControls() {
     renameEverywhere(playerName);
   });
 
-  for (let index = 0; index < CELL_COUNT; index += 1) {
-    const cell = document.createElement('button');
-    cell.type = 'button';
-    cell.className = 'cell';
-    cell.setAttribute('aria-label', `Cell ${index + 1}`);
-    cell.addEventListener('click', () => play(currentTableId, index));
-    elements.board.append(cell);
-  }
+  buildLabels();
+  buildBoard();
 
   elements.openTable.addEventListener('click', openTable);
   elements.backToHall.addEventListener('click', () => navigate(null));
+  elements.deselect.addEventListener('click', () => { selectedFrom = null; render(); });
 
   elements.seatAction.addEventListener('click', () => {
     const table = tables.getData()[currentTableId];
@@ -593,6 +836,7 @@ function wireControls() {
 
   window.addEventListener('popstate', () => {
     currentTableId = new URLSearchParams(window.location.search).get('game');
+    selectedFrom = null;
     publishPresence();
     render();
   });
