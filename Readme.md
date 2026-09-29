@@ -4,4 +4,4 @@ Build:
 
 Run:
 - Server: ./server
-- Client: ./client <port>
+- Client: ./client < port >
