@@ -1,11 +1,17 @@
 {
-  "name": "ottv2-game-server",
+  "name": "ottv2",
   "version": "1.0.0",
   "private": true,
-  "description": "A hall of two-player OTTv2 (rock-paper-scissors chess) tables, synced with playhtml",
+  "description": "OTTv2: a rock-paper-scissors strategy game where players submit bots and everyone watches the matches live",
   "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
-    "start": "node server.js"
+    "start": "node server/server.js",
+    "dev": "node --watch server/server.js",
+    "play": "node server/tools/play.js",
+    "test": "node --test test/"
   },
   "dependencies": {}
 }

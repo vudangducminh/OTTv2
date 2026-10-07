@@ -1,0 +1,21 @@
+Make a client-server application called OTTv2 such that:
+- The game:
++ A two-player turn-based game where players take turns to make moves.
++ The game is played on a 9x9 grid, each ceil named from a1 to i9.
++ Each player has 6 rocks token, 6 paper token, and 6 scissors token (the token is rounded).
+- The rules:
++ Players take turns move the token to a neighboring cell (horizontally, vertically, or diagonally). 
+The token cannot move to another friendly token. If the token moves to a cell occupied by an opponent's token, a battle occurs based on the rock-paper-scissors rules:
+    - Rock beats Scissors
+    - Scissors beats Paper
+    - Paper beats Rock
+If the token wins the battle, it occupies the cell, and the opponent's token is removed from the game. If the token loses, it is removed from the game. If there is a tie (both tokens are of the same type), then the move is not valid.
++ The ceil placement are randomly assigned. For p1, the tokens are placed in the first three rows (a1 to c9), and for p2, the tokens are placed in the last three rows (g1 to i9). The middle three rows (d1 to f9) are empty at the start of the game.
++ The game ends when one player has no tokens left on the board, or a token can reach a1 / i9 (the target must be at the other side of the board).
+
+- Requirements:
++ The client must show all the available matches that are currentlt active, and user are allow to watch the game live.
++ In order to join a match, the user must submit a code (using hand-made library) to the client. When there are two players
+(two code submissions), the server will handle the game logic internally, and output a log. Then, the client will display
+the game state to both players and spectator in real-time. 
++ The UI must be user-friendly and clean

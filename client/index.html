@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OTTv2 Arena</title>
+    <meta name="description" content="Rock, paper, scissors on a 9×9 board. Submit a bot, watch it play live." />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="styles.css" />
+    <script src="/library/ottv2.js"></script>
+    <script type="module" src="js/app.js"></script>
+  </head>
+  <body data-view="home">
+    <svg width="0" height="0" style="position: absolute" aria-hidden="true">
+      <!-- Hand gestures: rock is a fist, paper an open hand, scissors a V-sign. -->
+      <symbol id="i-rock" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3.5 9a2.25 2.25 0 0 1 4.5 0a2.25 2.25 0 0 1 4.5 0a2.25 2.25 0 0 1 4.5 0a2.25 2.25 0 0 1 4.5 0V15a6 6 0 0 1-6 6H9.5a6 6 0 0 1-6-6z" />
+          <path d="M8 9v3.5M12.5 9v3.5M17 9v3.5" />
+          <path d="M3.5 12.5H15a2.25 2.25 0 0 1 0 4.5H8" />
+        </g>
+      </symbol>
+      <symbol id="i-paper" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M6 15V7a2 2 0 0 1 4 0v4" />
+          <path d="M10 7V5a2 2 0 0 1 4 0v6" />
+          <path d="M14 7a2 2 0 0 1 4 0v5" />
+          <path d="M18 9a2 2 0 0 1 4 0v5a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.9-6-2.3l-3.6-3.6a2 2 0 0 1 2.8-2.8L6 15" />
+        </g>
+      </symbol>
+      <symbol id="i-scissors" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M6.08 13.56 3.58 5.06A2 2 0 0 1 7.42 3.94l2.5 8.5" />
+          <path d="M10.14 12.28 13.64 3.28A2 2 0 0 1 17.36 4.72L14.72 11.5" />
+          <path d="M14.72 11.5a1.69 1.69 0 0 1 3.38 0a1.7 1.7 0 0 1 3.4 0V16a6 6 0 0 1-6 6H12a6 6 0 0 1-6-6l.08-2.44" />
+          <path d="M18.1 11.5v2.5M6.5 17.5c3 0 6-1.2 8-3.5" />
+        </g>
+      </symbol>
+      <symbol id="i-target" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="1.6">
+          <circle cx="12" cy="12" r="9" />
+          <circle cx="12" cy="12" r="5" />
+        </g>
+        <circle cx="12" cy="12" r="1.6" fill="currentColor" />
+      </symbol>
+      <symbol id="i-first" viewBox="0 0 24 24">
+        <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 5v14M18 6l-8 6 8 6z" />
+      </symbol>
+      <symbol id="i-prev" viewBox="0 0 24 24">
+        <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m15 6-6 6 6 6" />
+      </symbol>
+      <symbol id="i-next" viewBox="0 0 24 24">
+        <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m9 6 6 6-6 6" />
+      </symbol>
+      <symbol id="i-last" viewBox="0 0 24 24">
+        <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M18 5v14M6 6l8 6-8 6z" />
+      </symbol>
+      <symbol id="i-play" viewBox="0 0 24 24"><path fill="currentColor" d="M8 5.5v13a1 1 0 0 0 1.5.9l10-6.5a1 1 0 0 0 0-1.7l-10-6.5A1 1 0 0 0 8 5.5z" /></symbol>
+      <symbol id="i-pause" viewBox="0 0 24 24"><path fill="currentColor" d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" /></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M12 5v14M5 12h14" /></symbol>
+      <symbol id="i-close" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6 6 18" /></symbol>
+      <symbol id="i-link" viewBox="0 0 24 24">
+        <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" />
+      </symbol>
+      <symbol id="i-download" viewBox="0 0 24 24">
+        <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19.5h14" />
+      </symbol>
+      <symbol id="i-eye" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="2"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" /><circle cx="12" cy="12" r="2.8" /></g>
+      </symbol>
+      <symbol id="i-book" viewBox="0 0 24 24">
+        <path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M4 5.5A1.5 1.5 0 0 1 5.5 4H11v15H5.5A1.5 1.5 0 0 0 4 20.5zM20 5.5A1.5 1.5 0 0 0 18.5 4H13v15h5.5a1.5 1.5 0 0 1 1.5 1.5z" />
+      </symbol>
+      <symbol id="i-trophy" viewBox="0 0 24 24">
+        <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M7.5 4h9v5a4.5 4.5 0 0 1-9 0zM7.5 6H4.5a3 3 0 0 0 3 4M16.5 6h3a3 3 0 0 1-3 4M12 13.5V17M8.5 20h7l-1-3h-5z" />
+      </symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="m5 12.5 4.5 4.5L19 7.5" /></symbol>
+      <symbol id="i-alert" viewBox="0 0 24 24">
+        <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9" /><path d="M12 7.5v5.5M12 16.5v.01" /></g>
+      </symbol>
+      <symbol id="i-upload" viewBox="0 0 24 24">
+        <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 15V4m0 0L7.5 8.5M12 4l4.5 4.5M5 19.5h14" />
+      </symbol>
+    </svg>
+
+    <header class="topbar">
+      <a class="brand" href="#/" aria-label="OTTv2 home">
+        <span class="brand-mark" aria-hidden="true"><i class="bm p1"></i><i class="bm p2"></i></span>
+        <span class="brand-name">OTTv2</span>
+        <span class="brand-tag">Rock · Paper · Scissors bot arena</span>
+      </a>
+      <nav class="topnav">
+        <span class="conn" id="conn" title="Connection to the server"><i></i><span>Connecting…</span></span>
+        <a class="btn ghost" href="#/docs"><svg class="ui-i"><use href="#i-book" /></svg><span>Bot library</span></a>
+        <button class="btn primary" type="button" data-action="new-match"><svg class="ui-i"><use href="#i-plus" /></svg><span>New match</span></button>
+      </nav>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar" aria-label="Matches">
+        <div id="match-list" class="match-list"></div>
+      </aside>
+
+      <main id="main">
+        <!-- Home -->
+        <section id="view-home" class="view">
+          <div class="hero">
+            <p class="eyebrow">Write a bot · Submit it · Watch it play</p>
+            <h1>Rock, paper, scissors on a 9×9 board, played by your code.</h1>
+            <p class="lead">
+              You don't move the tokens yourself. You write a small JavaScript bot with the <code>ottv2</code> library and submit it.
+              Once two bots are seated, the server plays the whole match and streams every move live to the players and anyone watching.
+            </p>
+            <div class="hero-actions">
+              <button class="btn primary lg" type="button" data-action="new-match"><svg class="ui-i"><use href="#i-plus" /></svg>New match</button>
+              <a class="btn lg" href="#/docs"><svg class="ui-i"><use href="#i-book" /></svg>Read the bot library</a>
+            </div>
+            <p class="hero-stats" id="home-stats"></p>
+          </div>
+
+          <div class="steps">
+            <div class="step">
+              <span class="step-n">1</span>
+              <h3>Write a bot</h3>
+              <p>Define <code>move(game)</code> and return one of <code>game.legalMoves()</code>. Start from one of the example bots if you like.</p>
+            </div>
+            <div class="step">
+              <span class="step-n">2</span>
+              <h3>Create or join a match</h3>
+              <p>Submit your code to open a table, join someone's waiting table, or play a house bot to practise.</p>
+            </div>
+            <div class="step">
+              <span class="step-n">3</span>
+              <h3>Watch it live</h3>
+              <p>The server runs the game and logs every move. Everyone sees it in real time, and you can replay it afterwards.</p>
+            </div>
+          </div>
+
+          <div class="rules card">
+            <div class="rules-text">
+              <h2>The rules</h2>
+              <ul>
+                <li>Each player has <b>6 rocks, 6 papers and 6 scissors</b>, placed at random. <span class="tag p1">Red</span> gets rows a–c and <span class="tag p2">Blue</span> gets rows g–i. Rows d–f start empty.</li>
+                <li>Players take turns. On your turn, move one token to any of its <b>8 neighbouring cells</b>, diagonals included. You can't move onto your own token.</li>
+                <li>Moving onto an enemy token starts a battle. The winner stays on the cell and the loser is removed. <b>Ties are not allowed</b>, so you can't move onto a token of the same type.</li>
+                <li>You win by getting a token to the far corner (<b>i9</b> for Red, <b>a1</b> for Blue) or by removing every enemy token.</li>
+              </ul>
+              <p class="fine">Server rules: Red moves first. A bot that crashes, takes too long or plays an illegal move forfeits. A player with no legal moves loses. After 400 moves, the player with more tokens wins.</p>
+            </div>
+            <div class="rps" aria-label="Rock beats scissors, scissors beats paper, paper beats rock">
+              <svg viewBox="0 0 200 180" class="rps-ring" aria-hidden="true">
+                <defs>
+                  <marker id="arrow" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M0 0 10 5 0 10z" fill="currentColor" />
+                  </marker>
+                </defs>
+                <g fill="none" stroke="currentColor" stroke-width="1.6" marker-end="url(#arrow)">
+                  <path d="M88 38 C 50 52, 36 86, 44 118" />
+                  <path d="M66 150 C 92 166, 116 166, 138 150" />
+                  <path d="M158 118 C 166 86, 152 52, 114 38" />
+                </g>
+              </svg>
+              <div class="rps-node n-rock"><span class="chip-demo"><svg><use href="#i-rock" /></svg></span>Rock</div>
+              <div class="rps-node n-scissors"><span class="chip-demo"><svg><use href="#i-scissors" /></svg></span>Scissors</div>
+              <div class="rps-node n-paper"><span class="chip-demo"><svg><use href="#i-paper" /></svg></span>Paper</div>
+              <p class="rps-caption">Each arrow points at what it beats</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- Match -->
+        <section id="view-match" class="view" hidden>
+          <div class="match-head">
+            <div class="match-title">
+              <a class="back-link" href="#/">← All matches</a>
+              <h1 id="m-title">Match</h1>
+              <div class="match-meta" id="m-meta"></div>
+            </div>
+            <div class="match-actions">
+              <button class="btn sm" type="button" id="m-copy"><svg class="ui-i"><use href="#i-link" /></svg>Copy link</button>
+              <a class="btn sm" id="m-download" href="#" download><svg class="ui-i"><use href="#i-download" /></svg>Log file</a>
+              <button class="btn sm danger" type="button" id="m-cancel" hidden>Cancel match</button>
+            </div>
+          </div>
+
+          <div class="result" id="m-result" hidden></div>
+
+          <div class="match-body">
+            <div class="board-col">
+              <div class="players">
+                <div class="player-card p1" id="m-p1"></div>
+                <div class="turn-box" id="m-turn"></div>
+                <div class="player-card p2" id="m-p2"></div>
+              </div>
+
+              <div class="board-frame">
+                <div id="board"></div>
+                <div class="board-overlay" id="m-overlay" hidden></div>
+              </div>
+
+              <div class="replay" id="m-replay">
+                <div class="replay-buttons">
+                  <button class="icon-btn" type="button" data-step="first" title="First position (Home)" aria-label="First position"><svg><use href="#i-first" /></svg></button>
+                  <button class="icon-btn" type="button" data-step="prev" title="Previous move (←)" aria-label="Previous move"><svg><use href="#i-prev" /></svg></button>
+                  <button class="icon-btn play" type="button" data-step="play" title="Play / pause (Space)" aria-label="Play"><svg><use href="#i-play" /></svg></button>
+                  <button class="icon-btn" type="button" data-step="next" title="Next move (→)" aria-label="Next move"><svg><use href="#i-next" /></svg></button>
+                  <button class="icon-btn" type="button" data-step="last" title="Latest move (End)" aria-label="Latest move"><svg><use href="#i-last" /></svg></button>
+                </div>
+                <input type="range" id="m-slider" min="0" max="0" value="0" aria-label="Move" />
+                <span class="ply-label" id="m-ply">Start</span>
+                <button class="live-btn" type="button" id="m-live" hidden><i></i>Live</button>
+              </div>
+            </div>
+
+            <div class="side-col">
+              <div class="panel">
+                <div class="tabs" role="tablist">
+                  <button type="button" role="tab" class="tab active" data-tab="moves" aria-selected="true">Moves</button>
+                  <button type="button" role="tab" class="tab" data-tab="log" aria-selected="false">Server log</button>
+                </div>
+                <ol class="moves" id="m-moves"></ol>
+                <div class="log" id="m-log" hidden></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Docs -->
+        <section id="view-docs" class="view docs" hidden>
+          <div class="docs-head">
+            <p class="eyebrow">Bot library</p>
+            <h1>Writing a bot with <code>ottv2</code></h1>
+            <p class="lead">
+              A bot is a JavaScript file with a <code>move(game)</code> function. Each turn the server calls it with the current position and plays whatever move it returns.
+              The library has the rules engine, so <code>game.legalMoves()</code> always matches what the server accepts.
+            </p>
+            <div class="hero-actions">
+              <a class="btn" href="/library/ottv2.js?download=1"><svg class="ui-i"><use href="#i-download" /></svg>Download ottv2.js</a>
+              <button class="btn primary" type="button" data-action="new-match"><svg class="ui-i"><use href="#i-plus" /></svg>Submit a bot</button>
+            </div>
+          </div>
+
+          <nav class="toc" aria-label="On this page">
+            <a href="#/docs" data-jump="d-start">Quick start</a>
+            <a href="#/docs" data-jump="d-match">How a match runs</a>
+            <a href="#/docs" data-jump="d-game">The game object</a>
+            <a href="#/docs" data-jump="d-lib">Library functions</a>
+            <a href="#/docs" data-jump="d-examples">Example bots</a>
+            <a href="#/docs" data-jump="d-local">Testing locally</a>
+          </nav>
+
+          <article class="doc-body">
+            <h2 id="d-start">Quick start</h2>
+            <p>This is a complete bot. It captures when it can win a battle, and otherwise makes a random move:</p>
+            <pre class="code"><code>const OTT = require('ottv2');
+
+function move(game) {
+  const moves = game.legalMoves();
+  const capture = moves.find((m) =&gt; m.outcome === 'win');
+  return capture || OTT.random(moves);
+}</code></pre>
+            <p>
+              <code>require('ottv2')</code> is the only import available. The library is also a global called <code>OTT</code>, and it's passed as a second argument: <code>move(game, OTT)</code>.
+              You can define <code>move</code> as a plain function, or export it with <code>module.exports = move</code> or <code>exports.move = move</code>.
+            </p>
+
+            <h3>What to return</h3>
+            <p>Return any one of these. They all mean the same move:</p>
+            <ul class="returns">
+              <li>an item from <code>game.legalMoves()</code> (recommended)</li>
+              <li>an object <code>{ from: 'c3', to: 'd4' }</code></li>
+              <li>a string such as <code>'c3 d4'</code>, <code>'c3-d4'</code> or <code>'c3d4'</code></li>
+              <li>an array <code>['c3', 'd4']</code></li>
+            </ul>
+
+            <h2 id="d-match">How a match runs</h2>
+            <ul>
+              <li>The first player to submit is <b class="tc p1">P1 · Red</b>. Red starts on rows a–c, moves first, and races for <b>i9</b>. The second player is <b class="tc p2">P2 · Blue</b>, starts on rows g–i, and races for <b>a1</b>.</li>
+              <li>When you submit, the server checks your bot on a test board. If it doesn't load or can't make a legal first move, you get the error right away, with a line number.</li>
+              <li>During the match each bot runs in its own sandboxed process. It has <b><span data-config="moveTimeLimitMs">1000</span> ms per move</b> and <b><span data-config="botMemoryMb">64</span> MB of memory</b>, with no network or file access. Top-level variables persist between turns, so you can keep state across moves.</li>
+              <li>If a bot throws an error, runs out of time or memory, or returns an illegal move, it <b>forfeits</b>. The reason is written to the log.</li>
+              <li>Output from <code>console.log</code> goes into the match's server log (up to 20 lines per turn). <code>console.log(game.toString())</code> prints the board.</li>
+              <li>The game ends when a token reaches the opposite corner, when one side has no tokens left, or when the player to move has no legal moves (that player loses). After <b>400 moves</b>, the player with more tokens wins. Equal counts are a draw.</li>
+            </ul>
+
+            <h2 id="d-game">The game object</h2>
+            <p>
+              <code>move(game)</code> receives an <code>OTT.Game</code>. Tokens are frozen objects <code>{ id, owner, type, cell }</code>: <code>owner</code> is <code>1</code> or <code>2</code>, <code>type</code> is
+              <code>'rock'</code>, <code>'paper'</code> or <code>'scissors'</code>, and <code>cell</code> is a name like <code>'e5'</code>.
+            </p>
+            <div class="api-table">
+              <div class="api-row"><code>game.me</code><span>Your player number, <code>1</code> or <code>2</code>.</span></div>
+              <div class="api-row"><code>game.opponent</code><span>The other player's number.</span></div>
+              <div class="api-row"><code>game.turn</code><span>Who is to move. During your call this equals <code>game.me</code>, but it changes in positions you get from <code>after()</code>.</span></div>
+              <div class="api-row"><code>game.ply</code><span>Number of moves played so far (both players).</span></div>
+              <div class="api-row"><code>game.maxPlies</code><span>The move limit (400).</span></div>
+              <div class="api-row"><code>game.myTarget</code> / <code>game.opponentTarget</code><span>The corner you need to reach (<code>'i9'</code> or <code>'a1'</code>), and theirs.</span></div>
+              <div class="api-row"><code>game.at(cell)</code><span>The token on <code>cell</code>, or <code>null</code>.</span></div>
+              <div class="api-row"><code>game.tokens(player?)</code><span>All tokens, or only one player's.</span></div>
+              <div class="api-row"><code>game.myTokens()</code> / <code>game.opponentTokens()</code><span>Shortcuts for <code>tokens(me)</code> and <code>tokens(opponent)</code>.</span></div>
+              <div class="api-row"><code>game.count(player, type?)</code><span>How many tokens a player has left, optionally of one type.</span></div>
+              <div class="api-row">
+                <code>game.legalMoves(player?)</code>
+                <span>Every legal move as <code>{ from, to, token, defender, outcome }</code>. <code>outcome</code> is <code>'move'</code> (empty cell), <code>'win'</code> (you capture <code>defender</code>) or <code>'lose'</code> (your token is removed).</span>
+              </div>
+              <div class="api-row"><code>game.movesFrom(cell)</code><span>Legal moves for the token on one cell.</span></div>
+              <div class="api-row"><code>game.threats(cell, type)</code><span>Enemy tokens next to <code>cell</code> that would beat a <code>type</code> token there, i.e. what could capture you if you moved there.</span></div>
+              <div class="api-row"><code>game.validate(move)</code><span><code>null</code> when the move is legal, otherwise the reason it isn't.</span></div>
+              <div class="api-row"><code>game.after(move)</code><span>A new <code>Game</code> with the move played. The original isn't changed. Use it for lookahead.</span></div>
+              <div class="api-row"><code>game.isOver</code>, <code>game.winner</code>, <code>game.reason</code><span>For positions from <code>after()</code>. <code>winner</code> is <code>1</code>, <code>2</code>, <code>0</code> (draw) or <code>null</code>.</span></div>
+              <div class="api-row"><code>game.history</code> / <code>game.lastMove</code><span>Moves so far: <code>{ ply, player, id, type, from, to, outcome, defender }</code>.</span></div>
+              <div class="api-row"><code>game.toString()</code><span>The board as text: Red in capitals (<code>R P S</code>), Blue in lowercase.</span></div>
+            </div>
+
+            <h2 id="d-lib">Library functions</h2>
+            <div class="api-table">
+              <div class="api-row"><code>OTT.beats(a, b)</code><span><code>true</code> if type <code>a</code> beats type <code>b</code>.</span></div>
+              <div class="api-row"><code>OTT.battle(attacker, defender)</code><span><code>'win'</code>, <code>'lose'</code> or <code>'tie'</code>.</span></div>
+              <div class="api-row"><code>OTT.counter(type)</code><span>The type that beats <code>type</code>: <code>counter('rock') === 'paper'</code>.</span></div>
+              <div class="api-row"><code>OTT.neighbors(cell)</code><span>The up to 8 cells touching <code>cell</code>.</span></div>
+              <div class="api-row"><code>OTT.distance(a, b)</code><span>How many moves it takes to get from <code>a</code> to <code>b</code> (diagonals count as one).</span></div>
+              <div class="api-row"><code>OTT.coords(cell)</code> / <code>OTT.cell(row, col)</code><span>Convert between <code>'c4'</code> and <code>{ row: 2, col: 3 }</code> (zero-based).</span></div>
+              <div class="api-row"><code>OTT.other(player)</code><span><code>1 → 2</code>, <code>2 → 1</code>.</span></div>
+              <div class="api-row"><code>OTT.random(list)</code><span>A random item of <code>list</code>.</span></div>
+              <div class="api-row"><code>OTT.ROCK</code>, <code>OTT.PAPER</code>, <code>OTT.SCISSORS</code>, <code>OTT.TARGETS</code><span>Constants. <code>TARGETS[1] === 'i9'</code>, <code>TARGETS[2] === 'a1'</code>.</span></div>
+            </div>
+
+            <h2 id="d-examples">Example bots</h2>
+            <p>Use any of these as a template in the submit dialog, or practise against them as house bots.</p>
+            <div class="examples" id="docs-examples"></div>
+
+            <h2 id="d-local">Testing locally</h2>
+            <p>If you have this project checked out, you can pit two bot files against each other in the same sandbox the server uses:</p>
+            <pre class="code"><code>node server/tools/play.js my-bot.js library/examples/greedy.js
+node server/tools/play.js my-bot.js library/examples/random.js --games 20</code></pre>
+            <p>You can also use <b>Test my bot</b> in the submit dialog. It runs your bot on a test board and shows its output without joining a match.</p>
+          </article>
+        </section>
+      </main>
+    </div>
+
+    <dialog class="dialog" id="submit-dialog" aria-labelledby="sd-title">
+      <form id="submit-form" novalidate>
+        <header class="dialog-head">
+          <div>
+            <h2 id="sd-title">New match</h2>
+            <p id="sd-sub" class="muted"></p>
+          </div>
+          <button class="icon-btn" type="button" data-close aria-label="Close"><svg><use href="#i-close" /></svg></button>
+        </header>
+
+        <div class="dialog-body">
+          <div class="field-row">
+            <label class="field" id="sd-name-field">
+              <span>Match name</span>
+              <input name="name" maxlength="40" autocomplete="off" placeholder="Optional, e.g. Friday showdown" />
+            </label>
+            <label class="field">
+              <span>Your name</span>
+              <input name="player" maxlength="24" autocomplete="nickname" placeholder="Ada" />
+            </label>
+          </div>
+
+          <label class="field" id="sd-opponent-field">
+            <span>Opponent</span>
+            <select name="opponent" id="sd-opponent"></select>
+          </label>
+
+          <div class="field">
+            <div class="editor-head">
+              <span>Bot code</span>
+              <div class="editor-tools">
+                <select id="sd-template" aria-label="Load an example bot"></select>
+                <label class="btn sm">
+                  <svg class="ui-i"><use href="#i-upload" /></svg>Upload .js
+                  <input type="file" id="sd-file" accept=".js,.mjs,.txt,text/javascript" hidden />
+                </label>
+              </div>
+            </div>
+            <div class="editor">
+              <pre class="gutter" id="sd-gutter" aria-hidden="true"></pre>
+              <textarea name="code" id="sd-code" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off" aria-label="Bot code"></textarea>
+            </div>
+            <p class="hint">Define <code>move(game)</code> and return one of <code>game.legalMoves()</code>. <span id="sd-limits"></span> <a href="#/docs" target="_blank" rel="noopener">Library reference ↗</a></p>
+          </div>
+
+          <div class="check" id="sd-check" hidden></div>
+        </div>
+
+        <footer class="dialog-foot">
+          <button class="btn ghost" type="button" id="sd-test">Test my bot</button>
+          <span class="spacer"></span>
+          <button class="btn" type="button" data-close>Cancel</button>
+          <button class="btn primary" type="submit" id="sd-submit">Create match</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <div class="toasts" id="toasts" aria-live="polite"></div>
+  </body>
+</html>
