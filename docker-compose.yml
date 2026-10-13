@@ -1,0 +1,44 @@
+# docker compose up --build        → app on http://localhost:6767 with its own PostgreSQL
+# docker compose up -d db          → only the database, for `npm run dev` on your machine
+#
+# Set POSTGRES_PASSWORD (and APP_PORT) in a .env file next to this one to change the defaults.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ottv2
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ottv2}
+      POSTGRES_DB: ottv2
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # Host port 5433 so it doesn't clash with a PostgreSQL already running on 5432.
+      # Bound to localhost only: players never talk to the database directly.
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ottv2 -d ottv2"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  app:
+    build: .
+    init: true
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://ottv2:${POSTGRES_PASSWORD:-ottv2}@db:5432/ottv2
+      PORT: 6767
+    ports:
+      # APP_PORT=8080 docker compose up   → serve on another host port
+      - "${APP_PORT:-6767}:6767"
+    volumes:
+      - logs:/app/server/logs
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  logs:

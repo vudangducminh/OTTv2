@@ -78,6 +78,12 @@
       <symbol id="i-alert" viewBox="0 0 24 24">
         <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9" /><path d="M12 7.5v5.5M12 16.5v.01" /></g>
       </symbol>
+      <symbol id="i-chart" viewBox="0 0 24 24">
+        <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 20h16M6.5 20v-6h3v6M10.5 20V8h3v12M14.5 20v-9h3v9" />
+      </symbol>
+      <symbol id="i-logout" viewBox="0 0 24 24">
+        <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M10 4.5H6.5A1.5 1.5 0 0 0 5 6v12a1.5 1.5 0 0 0 1.5 1.5H10M15 16l4-4-4-4M19 12H9.5" />
+      </symbol>
       <symbol id="i-upload" viewBox="0 0 24 24">
         <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 15V4m0 0L7.5 8.5M12 4l4.5 4.5M5 19.5h14" />
       </symbol>
@@ -91,7 +97,9 @@
       </a>
       <nav class="topnav">
         <span class="conn" id="conn" title="Connection to the server"><i></i><span>Connecting…</span></span>
-        <a class="btn ghost" href="#/docs"><svg class="ui-i"><use href="#i-book" /></svg><span>Bot library</span></a>
+        <a class="btn ghost nav-link" href="#/ranking" data-nav="ranking"><svg class="ui-i"><use href="#i-chart" /></svg><span>Ranking</span></a>
+        <a class="btn ghost nav-link" href="#/docs" data-nav="docs"><svg class="ui-i"><use href="#i-book" /></svg><span>Bot library</span></a>
+        <div class="account" id="account"></div>
         <button class="btn primary" type="button" data-action="new-match"><svg class="ui-i"><use href="#i-plus" /></svg><span>New match</span></button>
       </nav>
     </header>
@@ -127,7 +135,7 @@
             <div class="step">
               <span class="step-n">2</span>
               <h3>Create or join a match</h3>
-              <p>Submit your code to open a table, join someone's waiting table, or play a house bot to practise.</p>
+              <p>Log in, then submit your code to open a table, join someone's waiting table, or practise against a house bot.</p>
             </div>
             <div class="step">
               <span class="step-n">3</span>
@@ -145,7 +153,7 @@
                 <li>Moving onto an enemy token starts a battle. The winner stays on the cell and the loser is removed. <b>Ties are not allowed</b>, so you can't move onto a token of the same type.</li>
                 <li>You win by getting a token to the far corner (<b>i9</b> for Red, <b>a1</b> for Blue) or by removing every enemy token.</li>
               </ul>
-              <p class="fine">Server rules: Red moves first. A bot that crashes, takes too long or plays an illegal move forfeits. A player with no legal moves loses. After 400 moves, the player with more tokens wins.</p>
+              <p class="fine">Server rules: Red moves first. A bot that crashes, takes too long or plays an illegal move forfeits. A player with no legal moves loses. After 600 moves, the player with more tokens wins.</p>
             </div>
             <div class="rps" aria-label="Rock beats scissors, scissors beats paper, paper beats rock">
               <svg viewBox="0 0 200 180" class="rps-ring" aria-hidden="true">
@@ -225,6 +233,24 @@
           </div>
         </section>
 
+        <!-- Ranking -->
+        <section id="view-ranking" class="view" hidden>
+          <div class="page-head">
+            <p class="eyebrow">Rank standing</p>
+            <h1>Ranking</h1>
+            <p class="lead">
+              Everyone starts at 1000. Each rated game moves both players' ratings, and beating a higher-rated player is worth more.
+              Games between two players with accounts are rated. Games against a house bot or against yourself are practice and don't count.
+            </p>
+          </div>
+          <div id="ranking-body"></div>
+        </section>
+
+        <!-- Player profile -->
+        <section id="view-user" class="view" hidden>
+          <div id="user-body"></div>
+        </section>
+
         <!-- Docs -->
         <section id="view-docs" class="view docs" hidden>
           <div class="docs-head">
@@ -279,8 +305,9 @@ function move(game) {
               <li>When you submit, the server checks your bot on a test board. If it doesn't load or can't make a legal first move, you get the error right away, with a line number.</li>
               <li>During the match each bot runs in its own sandboxed process. It has <b><span data-config="moveTimeLimitMs">1000</span> ms per move</b> and <b><span data-config="botMemoryMb">64</span> MB of memory</b>, with no network or file access. Top-level variables persist between turns, so you can keep state across moves.</li>
               <li>If a bot throws an error, runs out of time or memory, or returns an illegal move, it <b>forfeits</b>. The reason is written to the log.</li>
+              <li>You need an account to submit a bot. A game between two different players with accounts is <b>rated</b> and moves both players on the <a href="#/ranking">ranking</a>. Games against house bots or yourself are practice.</li>
               <li>Output from <code>console.log</code> goes into the match's server log (up to 20 lines per turn). <code>console.log(game.toString())</code> prints the board.</li>
-              <li>The game ends when a token reaches the opposite corner, when one side has no tokens left, or when the player to move has no legal moves (that player loses). After <b>400 moves</b>, the player with more tokens wins. Equal counts are a draw.</li>
+              <li>The game ends when a token reaches the opposite corner, when one side has no tokens left, or when the player to move has no legal moves (that player loses). After <b>600 moves</b>, the player with more tokens wins. Equal counts are a draw.</li>
             </ul>
 
             <h2 id="d-game">The game object</h2>
@@ -293,7 +320,7 @@ function move(game) {
               <div class="api-row"><code>game.opponent</code><span>The other player's number.</span></div>
               <div class="api-row"><code>game.turn</code><span>Who is to move. During your call this equals <code>game.me</code>, but it changes in positions you get from <code>after()</code>.</span></div>
               <div class="api-row"><code>game.ply</code><span>Number of moves played so far (both players).</span></div>
-              <div class="api-row"><code>game.maxPlies</code><span>The move limit (400).</span></div>
+              <div class="api-row"><code>game.maxPlies</code><span>The move limit (600).</span></div>
               <div class="api-row"><code>game.myTarget</code> / <code>game.opponentTarget</code><span>The corner you need to reach (<code>'i9'</code> or <code>'a1'</code>), and theirs.</span></div>
               <div class="api-row"><code>game.at(cell)</code><span>The token on <code>cell</code>, or <code>null</code>.</span></div>
               <div class="api-row"><code>game.tokens(player?)</code><span>All tokens, or only one player's.</span></div>
@@ -350,21 +377,18 @@ node server/tools/play.js my-bot.js library/examples/random.js --games 20</code>
         </header>
 
         <div class="dialog-body">
-          <div class="field-row">
-            <label class="field" id="sd-name-field">
+          <p class="playing-as" id="sd-as"></p>
+
+          <div class="field-row" id="sd-create-fields">
+            <label class="field">
               <span>Match name</span>
               <input name="name" maxlength="40" autocomplete="off" placeholder="Optional, e.g. Friday showdown" />
             </label>
             <label class="field">
-              <span>Your name</span>
-              <input name="player" maxlength="24" autocomplete="nickname" placeholder="Ada" />
+              <span>Opponent</span>
+              <select name="opponent" id="sd-opponent"></select>
             </label>
           </div>
-
-          <label class="field" id="sd-opponent-field">
-            <span>Opponent</span>
-            <select name="opponent" id="sd-opponent"></select>
-          </label>
 
           <div class="field">
             <div class="editor-head">
@@ -392,6 +416,39 @@ node server/tools/play.js my-bot.js library/examples/random.js --games 20</code>
           <span class="spacer"></span>
           <button class="btn" type="button" data-close>Cancel</button>
           <button class="btn primary" type="submit" id="sd-submit">Create match</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog class="dialog narrow" id="auth-dialog" aria-labelledby="ad-title">
+      <form id="auth-form" novalidate>
+        <header class="dialog-head">
+          <div>
+            <h2 id="ad-title">Log in</h2>
+            <p id="ad-sub" class="muted"></p>
+          </div>
+          <button class="icon-btn" type="button" data-close aria-label="Close"><svg><use href="#i-close" /></svg></button>
+        </header>
+        <div class="dialog-body">
+          <div class="seg" role="tablist" aria-label="Log in or create an account">
+            <button type="button" role="tab" class="seg-btn active" data-mode="login" aria-selected="true">Log in</button>
+            <button type="button" role="tab" class="seg-btn" data-mode="register" aria-selected="false">Create account</button>
+          </div>
+          <label class="field">
+            <span>Username</span>
+            <input name="username" maxlength="20" autocomplete="username" autocapitalize="off" spellcheck="false" />
+          </label>
+          <label class="field">
+            <span>Password</span>
+            <input name="password" type="password" maxlength="200" autocomplete="current-password" />
+          </label>
+          <p class="hint" id="ad-hint"></p>
+          <div class="check bad" id="ad-error" hidden></div>
+        </div>
+        <footer class="dialog-foot">
+          <span class="spacer"></span>
+          <button class="btn" type="button" data-close>Cancel</button>
+          <button class="btn primary" type="submit" id="ad-submit">Log in</button>
         </footer>
       </form>
     </dialog>

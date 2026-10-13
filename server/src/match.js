@@ -1,4 +1,3 @@
-const crypto = require('node:crypto');
 const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -30,13 +29,17 @@ function placement(tokens, player) {
  *   'update'            seats, status or counts changed
  *   'move'   (record)   a move was played
  *   'log'    (entries)  new log entries
+ *
+ * `onFinish(match)` (optional, async) runs when the game ends, before the final
+ * 'update'. It saves the result and may return { rated, ratings }.
  */
 class Match extends EventEmitter {
-  constructor({ id, name, config }) {
+  constructor({ id, name, config, onFinish = null }) {
     super();
     this.id = id;
     this.name = name;
     this.config = config;
+    this.onFinish = onFinish;
     this.status = 'waiting'; // waiting → queued → running → finished | cancelled
     this.players = [null, null];
     this.game = null;
@@ -60,15 +63,19 @@ class Match extends EventEmitter {
     return index === -1 ? null : index + 1;
   }
 
-  /** Puts a player in `seat` (1 or 2). Returns the secret that lets them cancel. */
-  sit(seat, { name, code, house = null }) {
+  /** Puts a player in `seat` (1 or 2): a registered user (userId) or a house bot (house). */
+  sit(seat, { name, code, house = null, userId = null, rating = null }) {
     if (this.players[seat - 1]) throw new Error('That seat is already taken.');
-    const secret = crypto.randomBytes(16).toString('hex');
-    this.players[seat - 1] = { seat, name, code, house, secret, joinedAt: Date.now() };
+    this.players[seat - 1] = { seat, name, code, house, userId, rating, joinedAt: Date.now() };
     this._log('system', `${name} sits down as P${seat} (${COLORS[seat]})${house ? ' — house bot' : ''}`);
     if (this.players.every(Boolean)) this.status = 'queued';
     this.emit('update');
-    return secret;
+  }
+
+  /** The seat `userId` is sitting in, or null. */
+  seatOf(userId) {
+    const player = this.players.find((p) => p && p.userId !== null && p.userId === userId);
+    return player ? player.seat : null;
   }
 
   cancel(reason) {
@@ -107,7 +114,7 @@ class Match extends EventEmitter {
     } finally {
       for (const bot of this.bots) if (bot) bot.stop();
     }
-    this._finish();
+    await this._finish();
   }
 
   async _loadBots() {
@@ -165,13 +172,31 @@ class Match extends EventEmitter {
     this.game.forfeit(seat);
   }
 
-  _finish() {
+  async _finish() {
     const { game } = this;
-    const winner = game.winner;
     this.status = 'finished';
     this.finishedAt = Date.now();
-    this.result = { winner, reason: game.reason, message: this._resultMessage() };
+    this.result = { winner: game.winner, reason: game.reason, message: this._resultMessage(), rated: false, ratings: null };
     this._log('result', `Game over after ${game.ply} moves. ${this.result.message}`);
+
+    if (this.onFinish) {
+      try {
+        const saved = await this.onFinish(this);
+        if (saved && saved.rated) {
+          this.result.rated = true;
+          this.result.ratings = saved.ratings;
+          const line = (seat) => {
+            const { before, after } = saved.ratings[seat];
+            return `${this.players[seat - 1].name} ${before} → ${after} (${after >= before ? '+' : ''}${after - before})`;
+          };
+          this._log('system', `Ratings: ${line(1)}, ${line(2)}`);
+        }
+      } catch (error) {
+        console.error(`Match #${this.id}: could not save the result:`, error);
+        this._log('error', 'The result could not be saved to the database, so ratings were not updated.');
+      }
+    }
+
     this._closeLog();
     this.emit('update');
   }
@@ -258,7 +283,7 @@ class Match extends EventEmitter {
       id: this.id,
       name: this.name,
       status: this.status,
-      players: this.players.map((p) => (p ? { seat: p.seat, name: p.name, house: p.house } : null)),
+      players: this.players.map((p) => (p ? { seat: p.seat, name: p.name, house: p.house, userId: p.userId, rating: p.rating } : null)),
       ply: game ? game.ply : 0,
       turn: game ? game.turn : 1,
       maxPlies: game ? game.maxPlies : OTT.MAX_PLIES,

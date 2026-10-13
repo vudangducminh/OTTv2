@@ -18,10 +18,12 @@ function move(game) {
 `;
 
 export class SubmitDialog {
-  constructor({ examples, config, onSubmitted }) {
+  /** onLoggedOut runs when the server says the session has ended. */
+  constructor({ examples, config, onSubmitted, onLoggedOut }) {
     this.examples = examples;
     this.config = config;
     this.onSubmitted = onSubmitted;
+    this.onLoggedOut = onLoggedOut;
     this.dialog = $('#submit-dialog');
     this.form = $('#submit-form');
     this.code = $('#sd-code');
@@ -59,27 +61,33 @@ export class SubmitDialog {
     this._buildSelects();
   }
 
-  /** mode: 'create' | 'join'. For join, pass the match summary. */
-  open({ mode = 'create', match = null, template = null } = {}) {
+  /**
+   * mode: 'create' | 'join'. For join, pass the match summary. `me` is the
+   * logged-in user; the server seats you under that username.
+   */
+  open({ me, mode = 'create', match = null, template = null }) {
     this.mode = mode;
     this.match = match;
     const seat = mode === 'join' ? match.players.findIndex((p) => !p) + 1 : 1;
     this.seat = seat;
     const color = seat === 1 ? 'Red' : 'Blue';
+    const host = mode === 'join' ? match.players[2 - seat] : null;
+    const rated = host && host.userId && host.userId !== me.id;
 
     $('#sd-title').textContent = mode === 'join' ? `Join match #${match.id} · ${match.name}` : 'New match';
     $('#sd-sub').textContent =
       mode === 'join'
-        ? `You'll play as P${seat} (${color}) against ${match.players[2 - seat].name}. The match starts as soon as your bot is accepted.`
-        : `You'll play as P1 (Red) and move first. Choose a house bot to start right away, or wait for another player to join.`;
-    $('#sd-name-field').hidden = mode === 'join';
-    $('#sd-opponent-field').hidden = mode === 'join';
+        ? `You'll play as P${seat} (${color}) against ${host.name}. ${rated ? 'This game is rated.' : 'This game is practice and is not rated.'} It starts as soon as your bot is accepted.`
+        : `You'll play as P1 (Red) and move first. Wait for another player for a rated game, or practise against a house bot right away.`;
+    fill(
+      $('#sd-as'),
+      el('span', { class: 'avatar', style: 'width:24px;height:24px;font-size:11px' }, me.username.slice(0, 1)),
+      el('span', {}, 'Playing as ', el('b', {}, me.username), ` · rating ${me.rating}`),
+    );
+    $('#sd-create-fields').hidden = mode === 'join';
     this.submitButton.textContent = mode === 'join' ? `Join as P${seat}` : 'Create match';
     this.submitButton.className = `btn ${mode === 'join' ? `p${seat}` : 'primary'}`;
-
-    const form = this.form.elements;
-    form.player.value = store.get('ottv2.name', '');
-    form.player.classList.remove('invalid');
+    this.form.elements.name.placeholder = `Optional, e.g. ${me.username}'s match`;
 
     if (template) this._setCode(this._example(template)?.code || BLANK);
     else if (!this.code.value) this._setCode(store.get('ottv2.draft', null) || this._example('greedy')?.code || BLANK);
@@ -87,7 +95,7 @@ export class SubmitDialog {
     this._setBusy(false);
 
     if (!this.dialog.open) this.dialog.showModal();
-    (!form.player.value ? form.player : this.code).focus();
+    this.code.focus();
   }
 
   close() {
@@ -107,8 +115,8 @@ export class SubmitDialog {
     );
     const opponent = $('#sd-opponent');
     opponent.replaceChildren(
-      el('option', { value: '' }, 'Another player (wait in the lobby)'),
-      ...this.examples.map((e) => el('option', { value: e.id, title: e.description }, `House bot: ${e.name}`)),
+      el('option', { value: '' }, 'Another player (rated)'),
+      ...this.examples.map((e) => el('option', { value: e.id, title: e.description }, `House bot: ${e.name} (practice)`)),
     );
   }
 
@@ -207,22 +215,22 @@ export class SubmitDialog {
 
   _readForm() {
     const form = this.form.elements;
-    const player = form.player.value.trim();
-    const name = form.name.value.trim() || defaultMatchName(player);
     const code = this.code.value;
-    form.player.classList.toggle('invalid', !player);
-    if (!player) {
-      this._showCheck('bad', 'Enter your name so others know whose bot this is.');
-      form.player.focus();
-      return null;
-    }
     if (!code.trim()) {
       this._showCheck('bad', 'Paste or write your bot code first.');
       this.code.focus();
       return null;
     }
-    store.set('ottv2.name', player);
-    return { player, name, code, opponent: form.opponent.value || undefined };
+    // No player name: the server uses the logged-in account's username.
+    return { name: form.name.value.trim() || undefined, code, opponent: form.opponent.value || undefined };
+  }
+
+  /** A 401 means the session ended (logged out elsewhere, or expired). */
+  _sessionEnded(status) {
+    if (status !== 401) return false;
+    this.close();
+    this.onLoggedOut();
+    return true;
   }
 
   async _test() {
@@ -230,8 +238,9 @@ export class SubmitDialog {
     const code = this.code.value;
     if (!code.trim()) return this._showCheck('bad', 'Paste or write your bot code first.');
     this._setBusy(true, 'Running your bot on a test board…');
-    const { ok, data } = await api('POST', '/api/check', { code, seat: this.seat });
+    const { ok, status, data } = await api('POST', '/api/check', { code, seat: this.seat });
     this._setBusy(false);
+    if (this._sessionEnded(status)) return;
     if (!ok || !data) return this._showCheck('bad', data?.error || 'The check failed.');
     if (data.ok) {
       this._showCheck('ok', `Looks good. On a test board your bot played ${data.move.from} → ${data.move.to} in ${data.ms} ms.`, data.logs);
@@ -245,11 +254,12 @@ export class SubmitDialog {
     const values = this._readForm();
     if (!values) return;
     this._setBusy(true, 'Checking your bot…');
-    const { ok, data } =
+    const { ok, status, data } =
       this.mode === 'join'
-        ? await api('POST', `/api/matches/${this.match.id}/join`, { player: values.player, code: values.code })
+        ? await api('POST', `/api/matches/${this.match.id}/join`, { code: values.code })
         : await api('POST', '/api/matches', values);
     this._setBusy(false);
+    if (this._sessionEnded(status)) return;
     if (!ok) {
       this._showCheck('bad', data?.botError || data?.error || 'Something went wrong.', data?.logs || []);
       return;
@@ -258,8 +268,4 @@ export class SubmitDialog {
     this.close();
     this.onSubmitted(data);
   }
-}
-
-function defaultMatchName(player) {
-  return player ? `${player}'s match` : '';
 }

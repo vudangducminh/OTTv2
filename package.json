@@ -13,5 +13,7 @@
     "play": "node server/tools/play.js",
     "test": "node --test test/"
   },
-  "dependencies": {}
+  "dependencies": {
+    "pg": "^8.23.1"
+  }
 }

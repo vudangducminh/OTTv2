@@ -1,24 +1,17 @@
 const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
 const path = require('node:path');
+const { ApiError } = require('./errors');
 const { Match } = require('./match');
 const { checkBot } = require('./sandbox');
 
-/** An error with an HTTP status, shown to the user as-is. */
-class ArenaError extends Error {
-  constructor(status, message, details = {}) {
-    super(message);
-    this.status = status;
-    this.details = details;
-  }
-}
-
 const STATUS_ORDER = { running: 0, queued: 1, waiting: 2, finished: 3, cancelled: 3 };
+const MAX_OPEN_PER_USER = 3;
 
 function cleanText(value, label, max) {
   const text = typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
-  if (!text) throw new ArenaError(400, `Please enter ${label}.`);
-  if (text.length > max) throw new ArenaError(400, `${label[0].toUpperCase()}${label.slice(1)} must be at most ${max} characters.`);
+  if (!text) throw new ApiError(400, `Please enter ${label}.`);
+  if (text.length > max) throw new ApiError(400, `${label[0].toUpperCase()}${label.slice(1)} must be at most ${max} characters.`);
   return text;
 }
 
@@ -43,19 +36,30 @@ function loadExamples(libraryDir) {
     .sort((a, b) => (order.indexOf(a.id) + 1 || 99) - (order.indexOf(b.id) + 1 || 99));
 }
 
+function requireUser(user) {
+  if (!user) throw new ApiError(401, 'Log in to submit a bot.');
+}
+
 /**
  * All matches on this server. Emits 'lobby' when the list changes, and
  * 'match-start' / 'match-update' / 'match-move' / 'match-log' with the match first.
+ * With a database, finished matches are saved and rated.
  */
 class Arena extends EventEmitter {
-  constructor(config) {
+  constructor(config, { db = null } = {}) {
     super();
     this.config = config;
+    this.db = db;
     this.matches = new Map();
     this.nextId = 1;
     this.examples = loadExamples(config.libraryDir);
     this.sweeper = setInterval(() => this._sweep(), 60 * 1000);
     this.sweeper.unref();
+  }
+
+  /** Continues match numbering after the last saved match. */
+  async init() {
+    if (this.db) this.nextId = Math.max(this.nextId, await this.db.nextMatchId());
   }
 
   list() {
@@ -66,7 +70,7 @@ class Arena extends EventEmitter {
 
   get(id) {
     const match = this.matches.get(Number(id));
-    if (!match) throw new ArenaError(404, 'There is no such match. It may have finished a while ago.');
+    if (!match) throw new ApiError(404, 'There is no such match. It may have finished a while ago.');
     return match;
   }
 
@@ -74,52 +78,57 @@ class Arena extends EventEmitter {
     return this.examples.find((e) => e.id === id) || null;
   }
 
-  async check(code, seat) {
+  async check(user, code, seat) {
+    requireUser(user);
     return checkBot(code, seat === 2 ? 2 : 1);
   }
 
-  /** Opens a new match with the creator in seat 1, optionally against a house bot. */
-  async create({ name, player, code, opponent }) {
-    const matchName = cleanText(name, 'a match name', 40);
-    const playerName = cleanText(player, 'your name', 24);
+  /** Opens a new match with `user` in seat 1, optionally against a house bot. */
+  async create(user, { name, code, opponent }) {
+    requireUser(user);
+    const matchName = cleanText(name || `${user.username}'s match`, 'a match name', 40);
     const house = opponent ? this.example(String(opponent)) : null;
-    if (opponent && !house) throw new ArenaError(400, 'That house bot does not exist.');
-    const open = [...this.matches.values()].filter((m) => m.status !== 'finished' && m.status !== 'cancelled').length;
-    if (open >= this.config.maxOpenMatches) {
-      throw new ArenaError(503, 'The arena is full right now. Try again when a match has finished.');
+    if (opponent && !house) throw new ApiError(400, 'That house bot does not exist.');
+
+    const open = [...this.matches.values()].filter((m) => m.status !== 'finished' && m.status !== 'cancelled');
+    if (open.length >= this.config.maxOpenMatches) {
+      throw new ApiError(503, 'The arena is full right now. Try again when a match has finished.');
+    }
+    if (open.filter((m) => m.seatOf(user.id)).length >= MAX_OPEN_PER_USER) {
+      throw new ApiError(429, `You already have ${MAX_OPEN_PER_USER} matches open. Wait for one to finish first.`);
     }
 
     await this._requireWorkingBot(code, 1);
 
-    const match = this._register(new Match({ id: this.nextId++, name: matchName, config: this.config }));
-    const secret = match.sit(1, { name: playerName, code });
+    const match = this._register(new Match({ id: this.nextId++, name: matchName, config: this.config, onFinish: (m) => this._save(m) }));
+    match.sit(1, { name: user.username, code, userId: user.id, rating: user.rating });
     if (house) match.sit(2, { name: `${house.name} bot`, code: house.code, house: house.id });
     this._schedule();
-    return { match, seat: 1, secret };
+    return { match, seat: 1 };
   }
 
   /** Takes the open seat in a waiting match. */
-  async join(id, { player, code }) {
+  async join(id, user, { code }) {
+    requireUser(user);
     const match = this.get(id);
     const seat = match.openSeat;
-    if (!seat) throw new ArenaError(409, 'This match already has two players.');
-    const playerName = cleanText(player, 'your name', 24);
+    if (!seat) throw new ApiError(409, 'This match already has two players.');
 
     await this._requireWorkingBot(code, seat);
 
     // Someone may have taken the seat while the bot was being checked.
-    if (match.openSeat !== seat) throw new ArenaError(409, 'Someone else just took this seat.');
-    const secret = match.sit(seat, { name: playerName, code });
+    if (match.openSeat !== seat) throw new ApiError(409, 'Someone else just took this seat.');
+    match.sit(seat, { name: user.username, code, userId: user.id, rating: user.rating });
     this._schedule();
-    return { match, seat, secret };
+    return { match, seat };
   }
 
-  cancel(id, secret) {
+  cancel(id, user) {
+    requireUser(user);
     const match = this.get(id);
-    const owner = match.players.find((p) => p && p.secret === secret);
-    if (!owner) throw new ArenaError(403, 'Only a player in this match can cancel it.');
-    if (!match.cancel(`${owner.name} cancelled the match`)) {
-      throw new ArenaError(409, 'The match has already started, so it can no longer be cancelled.');
+    if (!match.seatOf(user.id)) throw new ApiError(403, 'Only a player in this match can cancel it.');
+    if (!match.cancel(`${user.username} cancelled the match`)) {
+      throw new ApiError(409, 'The match has already started, so it can no longer be cancelled.');
     }
     return match;
   }
@@ -127,8 +136,22 @@ class Arena extends EventEmitter {
   async _requireWorkingBot(code, seat) {
     const check = await checkBot(code, seat);
     if (!check.ok) {
-      throw new ArenaError(422, `Your bot did not pass the check: ${check.error}`, { botError: check.error, logs: check.logs });
+      throw new ApiError(422, `Your bot did not pass the check: ${check.error}`, { botError: check.error, logs: check.logs });
     }
+  }
+
+  _save(match) {
+    if (!this.db) return null;
+    return this.db.recordMatch({
+      id: match.id,
+      name: match.name,
+      players: match.players.map((p) => ({ userId: p.userId, name: p.name })),
+      winner: match.game.winner,
+      reason: match.game.reason,
+      plies: match.game.ply,
+      startedAt: match.startedAt,
+      finishedAt: match.finishedAt,
+    });
   }
 
   _register(match) {
@@ -179,4 +202,4 @@ class Arena extends EventEmitter {
   }
 }
 
-module.exports = { Arena, ArenaError };
+module.exports = { Arena };

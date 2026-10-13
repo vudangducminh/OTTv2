@@ -26,7 +26,7 @@
   const SCISSORS = 'scissors';
   const TYPES = Object.freeze([ROCK, PAPER, SCISSORS]);
   const TOKENS_PER_TYPE = 6;
-  const MAX_PLIES = 400;
+  const MAX_PLIES = 600;
   const HOME_ROWS = Object.freeze({ 1: 'abc', 2: 'ghi' });
   const TARGETS = Object.freeze({ 1: 'i9', 2: 'a1' });
   const BEATS = Object.freeze({ rock: SCISSORS, scissors: PAPER, paper: ROCK });

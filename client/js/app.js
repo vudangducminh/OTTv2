@@ -1,43 +1,121 @@
-import { $, el, fill, icon, toast, timeAgo, clock, store, api, copyText } from './ui.js';
+import { $, el, fill, icon, toast, timeAgo, clock, api, copyText } from './ui.js';
+import { AuthDialog } from './auth.js';
 import { Board } from './board.js';
+import { renderProfile, renderRanking } from './ranking.js';
 import { SubmitDialog } from './submit.js';
 
 const OTT = window.OTT;
 const COLOR = { 1: 'Red', 2: 'Blue' };
 const REPLAY_STEP_MS = 520;
+const VIEWS = ['home', 'match', 'ranking', 'user', 'docs'];
 
 const app = {
   matches: [],
   examples: [],
   config: null,
+  me: null,
   route: { view: 'home', id: null },
   match: null,
 };
 
 const board = new Board($('#board'));
 let dialog = null;
+let auth = null;
 
-// ---------- Seats this browser has taken ----------
+// ---------- Account ----------
 
-const seats = {
-  all() {
-    return store.get('ottv2.seats', {});
-  },
-  remember(summary, seat, secret) {
-    const all = this.all();
-    all[summary.id] = { seat, secret, createdAt: summary.createdAt };
-    const ids = Object.keys(all).sort((a, b) => all[b].createdAt - all[a].createdAt);
-    for (const id of ids.slice(60)) delete all[id];
-    store.set('ottv2.seats', all);
-  },
-  /** { seat, secret } if this browser submitted a bot to `summary`. */
-  of(summary) {
-    if (!summary) return null;
-    const entry = this.all()[summary.id];
-    // Match ids restart with the server, so also check it's the same match.
-    return entry && entry.createdAt === summary.createdAt ? entry : null;
-  },
-};
+/** The seat (1 or 2) the logged-in user has in `summary`, or null. */
+function mySeat(summary) {
+  if (!app.me || !summary) return null;
+  const player = summary.players.find((p) => p && p.userId === app.me.id);
+  return player ? player.seat : null;
+}
+
+function isMe(player) {
+  return Boolean(app.me && player && player.userId === app.me.id);
+}
+
+function renderAccount() {
+  const box = $('#account');
+  if (!app.me) {
+    fill(box, el('button', { class: 'btn', type: 'button', onclick: () => auth.open() }, 'Log in'));
+    return;
+  }
+  fill(
+    box,
+    el(
+      'a',
+      { class: 'user-chip', href: `#/user/${encodeURIComponent(app.me.username)}`, title: 'Your profile' },
+      el('span', { class: 'avatar' }, app.me.username.slice(0, 1)),
+      el('span', { class: 'uc-name' }, app.me.username),
+      el('span', { class: 'uc-rating' }, app.me.rating),
+    ),
+    el('button', { class: 'icon-btn', type: 'button', title: 'Log out', 'aria-label': 'Log out', onclick: logout }, icon('logout')),
+  );
+}
+
+function setMe(user) {
+  app.me = user;
+  renderAccount();
+  renderLobby();
+  if (app.match?.loaded) {
+    renderHeader();
+    renderPlayers();
+    renderResult();
+    renderOverlay();
+  }
+  if (app.route.view === 'ranking' || app.route.view === 'user') renderPage();
+}
+
+async function refreshMe() {
+  const { ok, data } = await api('GET', '/api/auth/me');
+  if (ok) setMe(data.user);
+}
+
+async function logout() {
+  await api('POST', '/api/auth/logout', {});
+  setMe(null);
+  toast('Logged out');
+}
+
+/** Runs `action` now when logged in, otherwise right after the user logs in. */
+function whenLoggedIn(reason, action) {
+  if (app.me) action();
+  else auth.open({ reason, then: action });
+}
+
+function openNewMatch(template = null) {
+  whenLoggedIn('Log in or create an account to submit a bot.', () => dialog.open({ me: app.me, mode: 'create', template }));
+}
+
+function openJoin(summary) {
+  whenLoggedIn('Log in or create an account to join this match.', () => dialog.open({ me: app.me, mode: 'join', match: summary }));
+}
+
+// Rated results change the ranking and the logged-in user's rating.
+const seenResults = new Set();
+let lobbyLoaded = false;
+
+function noticeResults(list) {
+  let changed = false;
+  let mine = false;
+  for (const m of list) {
+    if (m.status !== 'finished' || !m.result?.rated || seenResults.has(m.id)) continue;
+    seenResults.add(m.id);
+    if (!lobbyLoaded) continue;
+    changed = true;
+    if (mySeat(m)) mine = true;
+  }
+  lobbyLoaded = true;
+  if (mine) refreshMe();
+  else if (changed && (app.route.view === 'ranking' || app.route.view === 'user')) renderPage();
+}
+
+function renderPage() {
+  const context = { me: app.me, liveIds: new Set(app.matches.map((m) => m.id)) };
+  if (app.route.view === 'ranking') renderRanking($('#ranking-body'), context);
+  if (app.route.view === 'user') renderProfile($('#user-body'), app.route.id, context);
+}
 
 // ---------- Live stream ----------
 
@@ -56,6 +134,7 @@ const stream = {
     on('lobby', (list) => {
       app.matches = list;
       renderLobby();
+      noticeResults(list);
     });
     on('snapshot', (snapshot) => loadSnapshot(snapshot));
     on('missing', ({ id }) => showMissing(id));
@@ -80,26 +159,39 @@ function parseRoute() {
   const hash = location.hash.replace(/^#\/?/, '');
   const match = /^match\/(\d+)/.exec(hash);
   if (match) return { view: 'match', id: Number(match[1]) };
+  const user = /^user\/([^/?#]+)/.exec(hash);
+  if (user) return { view: 'user', id: decodeURIComponent(user[1]) };
+  if (hash.startsWith('ranking')) return { view: 'ranking', id: null };
   if (hash.startsWith('docs')) return { view: 'docs', id: null };
   return { view: 'home', id: null };
 }
+
+const TITLES = {
+  home: () => 'OTTv2 Arena',
+  match: (id) => `Match #${id} · OTTv2`,
+  ranking: () => 'Ranking · OTTv2',
+  user: (id) => `${id} · OTTv2`,
+  docs: () => 'Bot library · OTTv2',
+};
 
 function onRoute() {
   const previous = app.route;
   app.route = parseRoute();
   const { view, id } = app.route;
   document.body.dataset.view = view;
-  for (const name of ['home', 'match', 'docs']) $(`#view-${name}`).hidden = name !== view;
+  for (const name of VIEWS) $(`#view-${name}`).hidden = name !== view;
+  for (const link of document.querySelectorAll('[data-nav]')) link.classList.toggle('active', link.dataset.nav === view);
 
   if (view === 'match') {
     if (!app.match || app.match.id !== id) openMatch(id);
   } else {
     closeMatch();
   }
+  if (view === 'ranking' || view === 'user') renderPage();
   stream.connect(view === 'match' ? id : null);
   renderLobby();
   if (previous.view !== view || previous.id !== id) window.scrollTo(0, 0);
-  document.title = view === 'docs' ? 'Bot library · OTTv2' : view === 'match' ? `Match #${id} · OTTv2` : 'OTTv2 Arena';
+  document.title = TITLES[view](id);
 }
 
 // ---------- Lobby ----------
@@ -133,7 +225,7 @@ function matchItem(summary) {
   else if (summary.status === 'cancelled') meta = summary.result?.message || 'Cancelled';
   else meta = `${summary.ply} moves · ${timeAgo(summary.finishedAt)}`;
 
-  const mine = seats.of(summary);
+  const seat = mySeat(summary);
   return el(
     'a',
     { class: `mi${active ? ' active' : ''}`, href: `#/match/${summary.id}` },
@@ -145,7 +237,7 @@ function matchItem(summary) {
       el('span', { class: 'vs' }, 'vs'),
       el('span', { class: 'pn' }, el('i', { class: 'dot p2' }), p2 || el('span', { class: 'open' }, 'open seat')),
     ),
-    el('div', { class: 'mi-meta' }, mine ? `You're P${mine.seat} · ${meta}` : meta),
+    el('div', { class: 'mi-meta' }, seat ? `You're P${seat} · ${meta}` : meta),
     summary.status === 'running'
       ? el('div', { class: 'mi-bar' }, el('i', { style: `flex:${t1}` }), el('i', { style: `flex:${t2}` }))
       : null,
@@ -342,20 +434,46 @@ function renderMatch(animate) {
 
 function renderHeader() {
   const { summary } = app.match;
-  const mine = seats.of(summary);
+  const seat = mySeat(summary);
   $('#m-title').replaceChildren(el('span', { class: 'mid' }, `#${summary.id} `), summary.name);
 
   const meta = [statusPill(summary)];
+  if (isRated(summary)) meta.push(el('span', {}, 'Rated'));
+  else if (summary.players.every(Boolean)) meta.push(el('span', {}, 'Practice'));
   if (summary.watchers) meta.push(el('span', { class: 'meta-i' }, icon('eye'), `${summary.watchers} watching`));
   if (summary.startedAt) meta.push(el('span', {}, `Started ${clock(summary.startedAt)}`));
   else meta.push(el('span', {}, `Created ${timeAgo(summary.createdAt)}`));
-  if (mine) meta.push(el('span', {}, `You're P${mine.seat} (${COLOR[mine.seat]})`));
+  if (seat) meta.push(el('span', {}, `You're P${seat} (${COLOR[seat]})`));
   $('#m-meta').replaceChildren(...meta);
 
   const download = $('#m-download');
   download.hidden = !summary.startedAt;
   download.href = `/api/matches/${summary.id}/log`;
-  $('#m-cancel').hidden = !(mine && (summary.status === 'waiting' || summary.status === 'queued'));
+  $('#m-cancel').hidden = !(seat && (summary.status === 'waiting' || summary.status === 'queued'));
+}
+
+/** Two different registered players: the result will move the ranking. */
+function isRated(summary) {
+  if (summary.status === 'finished') return Boolean(summary.result?.rated);
+  const [p1, p2] = summary.players;
+  return Boolean(p1?.userId && p2?.userId && p1.userId !== p2.userId);
+}
+
+function signed(n) {
+  return `${n >= 0 ? '+' : '−'}${Math.abs(n)}`;
+}
+
+/** "Rating 1016", or "1000 → 1016 (+16)" once a rated match is over. */
+function ratingLine(summary, seat) {
+  const player = summary.players[seat - 1];
+  if (!player) return null;
+  if (player.house) return 'House bot · unrated';
+  const change = summary.result?.ratings?.[seat];
+  if (change) {
+    const diff = change.after - change.before;
+    return el('span', {}, `Rating ${change.before} → ${change.after} `, el('span', { class: `delta ${diff >= 0 ? 'up' : 'down'}` }, signed(diff)));
+  }
+  return player.rating ? `Rating ${player.rating}` : null;
 }
 
 function countsAt(frame) {
@@ -374,7 +492,6 @@ function renderPlayers() {
   const frame = m.frames[m.ply];
   const counts = frame ? countsAt(frame) : summary.tokens;
   const toMove = currentTurn();
-  const mine = seats.of(summary);
   const winner = summary.result?.winner;
 
   for (const seat of [1, 2]) {
@@ -382,12 +499,20 @@ function renderPlayers() {
     const card = $(`#m-p${seat}`);
     card.classList.toggle('active', summary.status === 'running' && toMove === seat);
     const tags = [];
-    if (mine && mine.seat === seat) tags.push(el('span', { class: 'chip-you' }, 'You'));
+    if (isMe(player)) tags.push(el('span', { class: 'chip-you' }, 'You'));
     if (player?.house) tags.push(el('span', { class: 'chip-house' }, 'House'));
     if (winner === seat && summary.status === 'finished') tags.push(el('span', { class: `tc p${seat}`, title: 'Winner' }, icon('trophy', 'ui-i')));
-    card.replaceChildren(
-      el('div', { class: 'pc-name' }, el('i', { class: `dot p${seat}` }), el('b', {}, player ? player.name : 'Open seat'), ...tags),
+    const name = !player
+      ? 'Open seat'
+      : player.userId
+        ? el('a', { href: `#/user/${encodeURIComponent(player.name)}`, style: 'text-decoration:none' }, player.name)
+        : player.name;
+    const rating = ratingLine(summary, seat);
+    fill(
+      card,
+      el('div', { class: 'pc-name' }, el('i', { class: `dot p${seat}` }), el('b', {}, name), ...tags),
       el('div', { class: 'pc-seat' }, `P${seat} · ${COLOR[seat]} · goal ${OTT.TARGETS[seat]}`),
+      rating ? el('div', { class: 'pc-rating' }, rating) : null,
       el(
         'div',
         { class: 'pc-counts' },
@@ -426,17 +551,31 @@ function renderResult() {
     box.hidden = true;
     return;
   }
-  const mine = seats.of(summary);
+  const seat = mySeat(summary);
   let headline;
   if (summary.status === 'cancelled') headline = 'Match cancelled';
   else if (!result.winner) headline = 'Draw';
-  else if (mine) headline = mine.seat === result.winner ? 'Your bot won!' : 'Your bot lost';
+  else if (seat && !summary.players.every((p) => isMe(p))) headline = seat === result.winner ? 'Your bot won!' : 'Your bot lost';
   else headline = `${playerName(summary, result.winner)} wins`;
 
+  let ratings = null;
+  if (result.rated && result.ratings) {
+    const part = (s) => {
+      const { before, after } = result.ratings[s];
+      return `${playerName(summary, s)} ${before} → ${after} (${signed(after - before)})`;
+    };
+    ratings = seat
+      ? `Your rating: ${result.ratings[seat].before} → ${result.ratings[seat].after} (${signed(result.ratings[seat].after - result.ratings[seat].before)})`
+      : `Ratings: ${part(1)} · ${part(2)}`;
+  } else if (summary.status === 'finished') {
+    ratings = 'Practice game: ratings are unchanged.';
+  }
+
   box.className = `result${result.winner ? ` win${result.winner}` : ''}`;
-  box.replaceChildren(
+  fill(
+    box,
     el('span', { class: 'r-icon' }, icon(result.winner ? 'trophy' : 'alert')),
-    el('div', {}, el('strong', {}, headline), el('span', {}, result.message || '')),
+    el('div', {}, el('strong', {}, headline), el('span', {}, result.message || ''), ratings ? el('span', { class: 'r-ratings' }, ratings) : null),
   );
   box.hidden = false;
 }
@@ -451,31 +590,35 @@ function renderOverlay() {
   const m = app.match;
   const { summary } = m;
   const overlay = $('#m-overlay');
-  const mine = seats.of(summary);
+  const seat = mySeat(summary);
 
   if (summary.status === 'waiting') {
     const open = summary.players.findIndex((p) => !p) + 1;
     const host = summary.players[2 - open];
-    const actions = mine
+    const actions = seat
       ? [
           el('button', { class: 'btn primary', type: 'button', onclick: copyLink }, icon('link', 'ui-i'), 'Copy invite link'),
           el('button', { class: 'btn danger', type: 'button', onclick: cancelMatch }, 'Cancel match'),
         ]
       : [
-          el('button', { class: `btn p${open}`, type: 'button', onclick: () => dialog.open({ mode: 'join', match: summary }) }, `Join as P${open} (${COLOR[open]})`),
+          el(
+            'button',
+            { class: `btn p${open}`, type: 'button', onclick: () => openJoin(summary) },
+            app.me ? `Join as P${open} (${COLOR[open]})` : `Log in to join as P${open}`,
+          ),
           el('button', { class: 'btn', type: 'button', onclick: copyLink }, icon('link', 'ui-i'), 'Copy link'),
         ];
     showOverlay(
       el(
         'div',
         { class: 'overlay-card' },
-        el('h3', {}, mine ? 'Waiting for an opponent' : `${host?.name || 'Someone'} is looking for an opponent`),
+        el('h3', {}, seat ? 'Waiting for an opponent' : `${host?.name || 'Someone'} is looking for an opponent`),
         el(
           'p',
           {},
-          mine
-            ? 'Your bot passed the check and is seated. Share the link. The match starts when someone joins with their bot.'
-            : `Submit your bot to take the ${COLOR[open]} seat. The match starts right away.`,
+          seat
+            ? 'Your bot passed the check and is seated. Share the link. The match starts when another player joins with their bot, and the result will be rated.'
+            : `Submit your bot to take the ${COLOR[open]} seat. The match starts right away${host?.rating ? `, and it's rated (${host.name} is rated ${host.rating})` : ''}.`,
         ),
         el('div', { class: 'oc-actions' }, ...actions),
       ),
@@ -705,9 +848,8 @@ async function copyLink() {
 
 async function cancelMatch() {
   const m = app.match;
-  const mine = m && seats.of(m.summary);
-  if (!mine || !confirm('Cancel this match? Your bot will leave the table.')) return;
-  const { ok, data } = await api('POST', `/api/matches/${m.id}/cancel`, { secret: mine.secret });
+  if (!m || !mySeat(m.summary) || !confirm('Cancel this match? Your bot will leave the table.')) return;
+  const { ok, data } = await api('POST', `/api/matches/${m.id}/cancel`, {});
   if (!ok) toast(data?.error || 'Could not cancel the match.', 'bad');
 }
 
@@ -724,7 +866,7 @@ function renderDocs() {
         el(
           'div',
           { class: 'ex-actions' },
-          el('button', { class: 'btn sm primary', type: 'button', onclick: () => dialog.open({ mode: 'create', template: example.id }) }, 'Use as template'),
+          el('button', { class: 'btn sm primary', type: 'button', onclick: () => openNewMatch(example.id) }, 'Use as template'),
           el('a', { class: 'btn sm', href: `/library/examples/${example.id}.js?download=1` }, icon('download', 'ui-i'), 'Download'),
         ),
       ),
@@ -737,20 +879,35 @@ function renderDocs() {
 
 // ---------- Startup ----------
 
-function onSubmitted({ match, seat, secret }) {
-  seats.remember(match, seat, secret);
+function onSubmitted({ match }) {
   toast(match.status === 'waiting' ? 'Your bot is seated. Waiting for an opponent.' : 'Your bot is in. The match is starting.');
   location.hash = `#/match/${match.id}`;
 }
 
 async function start() {
-  const [examples, config] = await Promise.all([api('GET', '/api/examples'), api('GET', '/api/config')]);
+  const [examples, config, me] = await Promise.all([api('GET', '/api/examples'), api('GET', '/api/config'), api('GET', '/api/auth/me')]);
   app.examples = examples.ok ? examples.data : [];
   app.config = config.ok ? config.data : null;
+  app.me = me.ok ? me.data.user : null;
 
-  dialog = new SubmitDialog({ examples: app.examples, config: app.config, onSubmitted });
+  auth = new AuthDialog({
+    onLogin: (user, mode) => {
+      setMe(user);
+      toast(mode === 'register' ? `Welcome, ${user.username}! Your rating starts at ${user.rating}.` : `Logged in as ${user.username}`);
+    },
+  });
+  dialog = new SubmitDialog({
+    examples: app.examples,
+    config: app.config,
+    onSubmitted,
+    onLoggedOut: () => {
+      setMe(null);
+      auth.open({ reason: 'Your session has ended. Log in again to continue.' });
+    },
+  });
+  renderAccount();
   for (const button of document.querySelectorAll('[data-action="new-match"]')) {
-    button.addEventListener('click', () => dialog.open({ mode: 'create' }));
+    button.addEventListener('click', () => openNewMatch());
   }
   for (const link of document.querySelectorAll('[data-jump]')) {
     link.addEventListener('click', (event) => {

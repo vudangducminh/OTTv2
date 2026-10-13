@@ -1,15 +1,27 @@
 const path = require('node:path');
 
-function number(name, fallback) {
-  const value = Number(process.env[name]);
-  return Number.isFinite(value) && value >= 0 ? value : fallback;
+const root = path.resolve(__dirname, '..', '..');
+
+// Settings can live in a .env file at the project root (see .env.example).
+// Variables already set in the environment win.
+try {
+  process.loadEnvFile(path.join(root, '.env'));
+} catch {
+  /* no .env file */
 }
 
-const root = path.resolve(__dirname, '..', '..');
+function number(name, fallback) {
+  const value = Number(process.env[name]);
+  return process.env[name] !== undefined && process.env[name] !== '' && Number.isFinite(value) && value >= 0 ? value : fallback;
+}
 
 module.exports = Object.freeze({
   host: process.env.HOST || '0.0.0.0',
   port: number('PORT', 6767),
+
+  // Defaults to the database from `docker compose up -d db`.
+  databaseUrl: process.env.DATABASE_URL || 'postgres://ottv2:ottv2@localhost:5433/ottv2',
+  sessionDays: number('SESSION_DAYS', 30),
 
   clientDir: path.join(root, 'client'),
   libraryDir: path.join(root, 'library'),

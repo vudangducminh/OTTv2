@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
-const { ArenaError } = require('./arena');
+const { ApiError } = require('./errors');
 
 const CONTENT_TYPES = {
   '.css': 'text/css; charset=utf-8',
@@ -17,24 +17,30 @@ const CONTENT_TYPES = {
 const LOBBY_THROTTLE_MS = 400;
 const HEARTBEAT_MS = 20 * 1000;
 
-function sendJson(response, status, body) {
+function sendJson(response, status, body, headers = {}) {
   const text = JSON.stringify(body);
   response.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'cache-control': 'no-store',
     'content-length': Buffer.byteLength(text),
+    ...headers,
   });
   response.end(text);
 }
 
 function readJson(request, limit) {
+  // HTML forms on other sites can't send this content type without the
+  // browser asking us first, so it also blocks cross-site form posts.
+  if (!/^application\/json\b/i.test(request.headers['content-type'] || '')) {
+    return Promise.reject(new ApiError(415, 'Send the request body as JSON.'));
+  }
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks = [];
     request.on('data', (chunk) => {
       size += chunk.length;
       if (size > limit) {
-        reject(new ArenaError(413, 'The request is too large.'));
+        reject(new ApiError(413, 'The request is too large.'));
         request.destroy();
         return;
       }
@@ -42,9 +48,10 @@ function readJson(request, limit) {
     });
     request.on('end', () => {
       try {
-        resolve(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {});
+        const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {};
+        resolve(body && typeof body === 'object' ? body : {});
       } catch {
-        reject(new ArenaError(400, 'The request body is not valid JSON.'));
+        reject(new ApiError(400, 'The request body is not valid JSON.'));
       }
     });
     request.on('error', reject);
@@ -161,12 +168,83 @@ class Hub {
   }
 }
 
-function createServer(arena, config) {
+/**
+ * The HTTP server: API routes, the live event stream, and the client's files.
+ * `accounts` and `db` are optional; without them there is no login or ranking.
+ */
+function createServer({ arena, accounts = null, db = null, config }) {
   const hub = new Hub(arena);
   const bodyLimit = config.maxCodeBytes + 16 * 1024;
 
+  const currentUser = (req) => (accounts ? accounts.userFromCookie(req.headers.cookie) : null);
+  const needAccounts = () => {
+    if (!accounts) throw new ApiError(503, 'Accounts are not available on this server.');
+  };
+
   const routes = [
     ['GET', /^\/api\/stream$/, (req, res, _params, url) => hub.open(req, res, url.searchParams.get('match'))],
+    [
+      'GET',
+      /^\/api\/health$/,
+      async (req, res) => {
+        const database = db ? await db.healthy() : null;
+        sendJson(res, database === false ? 503 : 200, { ok: database !== false, database });
+      },
+    ],
+
+    // ----- accounts
+    [
+      'POST',
+      /^\/api\/auth\/register$/,
+      async (req, res) => {
+        needAccounts();
+        const body = await readJson(req, 4096);
+        const { user, cookie } = await accounts.register(body.username, body.password);
+        sendJson(res, 201, { user }, { 'set-cookie': cookie });
+      },
+    ],
+    [
+      'POST',
+      /^\/api\/auth\/login$/,
+      async (req, res) => {
+        needAccounts();
+        const body = await readJson(req, 4096);
+        const { user, cookie } = await accounts.login(body.username, body.password, req.socket.remoteAddress);
+        sendJson(res, 200, { user }, { 'set-cookie': cookie });
+      },
+    ],
+    [
+      'POST',
+      /^\/api\/auth\/logout$/,
+      async (req, res) => {
+        needAccounts();
+        await readJson(req, 4096);
+        sendJson(res, 200, { ok: true }, { 'set-cookie': await accounts.logout(req.headers.cookie) });
+      },
+    ],
+    ['GET', /^\/api\/auth\/me$/, async (req, res) => sendJson(res, 200, { user: await currentUser(req) })],
+
+    // ----- ranking
+    [
+      'GET',
+      /^\/api\/leaderboard$/,
+      async (req, res) => {
+        if (!db) throw new ApiError(503, 'The ranking is not available on this server.');
+        sendJson(res, 200, { players: await db.leaderboard(100) });
+      },
+    ],
+    [
+      'GET',
+      /^\/api\/users\/([A-Za-z0-9_-]{1,40})$/,
+      async (req, res, [username]) => {
+        if (!db) throw new ApiError(503, 'Profiles are not available on this server.');
+        const profile = await db.profile(username);
+        if (!profile) throw new ApiError(404, `There is no player called ${username}.`);
+        sendJson(res, 200, profile);
+      },
+    ],
+
+    // ----- matches
     ['GET', /^\/api\/matches$/, (req, res) => sendJson(res, 200, arena.list())],
     ['GET', /^\/api\/matches\/(\d+)$/, (req, res, [id]) => sendJson(res, 200, arena.get(id).snapshot())],
     [
@@ -188,8 +266,8 @@ function createServer(arena, config) {
       /^\/api\/matches$/,
       async (req, res) => {
         const body = await readJson(req, bodyLimit);
-        const { match, seat, secret } = await arena.create(body);
-        sendJson(res, 201, { match: match.summary(), seat, secret });
+        const { match, seat } = await arena.create(await currentUser(req), body);
+        sendJson(res, 201, { match: match.summary(), seat });
       },
     ],
     [
@@ -197,16 +275,16 @@ function createServer(arena, config) {
       /^\/api\/matches\/(\d+)\/join$/,
       async (req, res, [id]) => {
         const body = await readJson(req, bodyLimit);
-        const { match, seat, secret } = await arena.join(id, body);
-        sendJson(res, 200, { match: match.summary(), seat, secret });
+        const { match, seat } = await arena.join(id, await currentUser(req), body);
+        sendJson(res, 200, { match: match.summary(), seat });
       },
     ],
     [
       'POST',
       /^\/api\/matches\/(\d+)\/cancel$/,
       async (req, res, [id]) => {
-        const body = await readJson(req, 4096);
-        sendJson(res, 200, { match: arena.cancel(id, body.secret).summary() });
+        await readJson(req, 4096);
+        sendJson(res, 200, { match: arena.cancel(id, await currentUser(req)).summary() });
       },
     ],
     [
@@ -214,7 +292,7 @@ function createServer(arena, config) {
       /^\/api\/check$/,
       async (req, res) => {
         const body = await readJson(req, bodyLimit);
-        sendJson(res, 200, await arena.check(body.code, Number(body.seat)));
+        sendJson(res, 200, await arena.check(await currentUser(req), body.code, Number(body.seat)));
       },
     ],
     [
@@ -246,8 +324,8 @@ function createServer(arena, config) {
           return;
         }
       }
-      if (url.pathname.startsWith('/api/')) throw new ArenaError(404, 'Unknown API endpoint.');
-      if (request.method !== 'GET' && request.method !== 'HEAD') throw new ArenaError(405, 'Method not allowed.');
+      if (url.pathname.startsWith('/api/')) throw new ApiError(404, 'Unknown API endpoint.');
+      if (request.method !== 'GET' && request.method !== 'HEAD') throw new ApiError(405, 'Method not allowed.');
       const served = url.pathname.startsWith('/library/')
         ? serveStatic(config.libraryDir, url.pathname.slice('/library'.length), request, response)
         : serveStatic(config.clientDir, url.pathname, request, response);
@@ -260,7 +338,7 @@ function createServer(arena, config) {
         response.end();
         return;
       }
-      if (error instanceof ArenaError) {
+      if (error instanceof ApiError) {
         sendJson(response, error.status, { error: error.message, ...error.details });
       } else {
         console.error(error);
