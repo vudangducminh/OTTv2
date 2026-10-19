@@ -4,6 +4,7 @@ const { Accounts } = require('./src/accounts');
 const { Arena } = require('./src/arena');
 const { Database } = require('./src/db');
 const { createServer } = require('./src/http');
+const { Tournaments } = require('./src/tournaments');
 
 function localAddresses() {
   return Object.values(os.networkInterfaces())
@@ -26,17 +27,20 @@ async function main() {
   const accounts = new Accounts(db, config);
   const arena = new Arena(config, { db });
   await arena.init();
-  const server = createServer({ arena, accounts, db, config });
+  const tournaments = new Tournaments({ db, arena });
+  const server = createServer({ arena, accounts, db, tournaments, config });
 
   // One console line per match milestone; the move-by-move log goes to server/logs/.
   arena.on('match-log', (match, entry) => {
-    if (entry.kind === 'result' || /started:/.test(entry.text) || /^Ratings:/.test(entry.text)) {
+    if (entry.kind === 'result' || /started:/.test(entry.text)) {
       console.log(`[match #${match.id}] ${entry.text}`);
     }
   });
 
   const cleanup = setInterval(() => db.deleteExpiredSessions().catch(() => {}), 60 * 60 * 1000);
   cleanup.unref();
+
+  await tournaments.init(); // resume tournaments that were running before a restart
 
   server.listen(config.port, config.host, () => {
     console.log(`OTTv2 arena running on http://localhost:${config.port}`);

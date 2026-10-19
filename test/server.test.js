@@ -12,6 +12,7 @@ const { Accounts } = require('../server/src/accounts');
 const { Arena } = require('../server/src/arena');
 const { Database } = require('../server/src/db');
 const { createServer } = require('../server/src/http');
+const { Tournaments } = require('../server/src/tournaments');
 
 const examples = path.join(__dirname, '..', 'library', 'examples');
 const greedy = fs.readFileSync(path.join(examples, 'greedy.js'), 'utf8');
@@ -25,7 +26,12 @@ function move(game) {
   return game.legalMoves()[0];
 }`;
 
-const config = { ...baseConfig, moveDelayMs: 0, logDir: fs.mkdtempSync(path.join(os.tmpdir(), 'ottv2-test-')) };
+const config = {
+  ...baseConfig,
+  moveDelayMs: 0,
+  tournamentMoveDelayMs: 0,
+  logDir: fs.mkdtempSync(path.join(os.tmpdir(), 'ottv2-test-')),
+};
 let db;
 let server;
 let base;
@@ -42,7 +48,8 @@ test.before(async () => {
   await db.reset();
   const arena = new Arena(config, { db });
   await arena.init();
-  server = createServer({ arena, accounts: new Accounts(db, config), db, config });
+  const tournaments = new Tournaments({ db, arena });
+  server = createServer({ arena, accounts: new Accounts(db, config), db, tournaments, config });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -59,8 +66,9 @@ test.after(async () => {
 });
 
 /** Tests that need the database are skipped (with the reason) when it isn't running. */
-function dbTest(name, fn) {
-  test(name, async (t) => {
+function dbTest(name, options, fn) {
+  if (typeof options === 'function') [options, fn] = [{}, options];
+  test(name, options, async (t) => {
     if (skipReason) {
       t.skip(skipReason);
       return;
@@ -155,7 +163,9 @@ dbTest('register, log in, log out', async () => {
   const created = await ann.api('POST', '/api/auth/register', { username: 'ann', password: 'correct-horse' });
   assert.equal(created.status, 201);
   assert.equal(created.body.user.username, 'ann');
-  assert.equal(created.body.user.rating, 1000);
+  assert.equal(created.body.user.games, 0);
+  assert.equal(created.body.user.points, undefined);
+  assert.equal(created.body.user.rating, undefined);
   assert.equal(created.body.user.password_hash, undefined);
   assert.match(created.headers.get('set-cookie'), /HttpOnly/);
   assert.match(created.headers.get('set-cookie'), /SameSite=Lax/);
@@ -210,7 +220,6 @@ dbTest('two players: usernames on the seats, live stream, rated result, ranking 
   assert.equal(created.status, 201);
   const id = created.body.match.id;
   assert.equal(created.body.match.players[0].name, 'player_one');
-  assert.equal(created.body.match.players[0].rating, 1000);
 
   const spectator = stream(`?match=${id}`, (events) => events.some((e) => e.event === 'update' && e.data.status === 'finished'));
 
@@ -233,30 +242,25 @@ dbTest('two players: usernames on the seats, live stream, rated result, ranking 
   assert.equal(final.result.winner, 2);
   assert.match(final.result.message, /boom/);
   assert.equal(final.result.rated, true);
-  assert.deepEqual(final.result.ratings, { 1: { before: 1000, after: 984 }, 2: { before: 1000, after: 1016 } });
 
-  assert.equal((await p1.api('GET', '/api/auth/me')).body.user.rating, 984);
-  const board = (await p1.api('GET', '/api/leaderboard')).body.players;
-  assert.deepEqual(
-    board.map((p) => [p.rank, p.username, p.rating, p.wins, p.losses]),
-    [
-      [1, 'player_two', 1016, 1, 0],
-      [2, 'player_one', 984, 0, 1],
-    ],
-  );
+  // There is no global ranking any more; standings live inside tournaments.
+  assert.equal((await p1.api('GET', '/api/leaderboard')).status, 404);
 
+  // Both players' profile records count the game.
+  const winner = (await p2.api('GET', '/api/auth/me')).body.user;
+  assert.deepEqual([winner.games, winner.wins, winner.losses], [1, 1, 0]);
   const profile = (await new Client().api('GET', '/api/users/PLAYER_TWO')).body;
   assert.equal(profile.user.username, 'player_two');
-  assert.equal(profile.user.rank, 1);
+  assert.equal(profile.user.rank, undefined);
   assert.deepEqual(
-    profile.matches.map((m) => [m.id, m.result, m.opponent.name, m.rated, m.ratingBefore, m.ratingAfter]),
-    [[id, 'win', 'player_one', true, 1000, 1016]],
+    profile.matches.map((m) => [m.id, m.result, m.opponent.name, m.rated]),
+    [[id, 'win', 'player_one', true]],
   );
   assert.equal((await new Client().api('GET', '/api/users/nobody_here')).status, 404);
 
   const log = await (await fetch(`${base}/api/matches/${id}/log`)).text();
   assert.match(log, /started: P1 player_one \(Red\) vs P2 player_two \(Blue\)/);
-  assert.match(log, /Ratings: player_one 1000 → 984 \(-16\), player_two 1000 → 1016 \(\+16\)/);
+  assert.doesNotMatch(log, /Points:|Ratings:/);
 });
 
 dbTest('games against a house bot are saved but not rated', async () => {
@@ -269,10 +273,8 @@ dbTest('games against a house bot are saved but not rated', async () => {
   const final = await waitForEnd(eve, created.body.match.id);
   assert.equal(final.result.rated, false);
   const me = (await eve.api('GET', '/api/auth/me')).body.user;
-  assert.equal(me.rating, 1000);
   assert.equal(me.games, 0);
   const profile = (await eve.api('GET', '/api/users/eve')).body;
-  assert.equal(profile.user.rank, null);
   assert.deepEqual(
     profile.matches.map((m) => [m.result, m.rated, m.opponent.registered]),
     [['loss', false, false]],
@@ -289,6 +291,176 @@ dbTest('only a seated player can cancel a waiting match', async () => {
   const ok = await fay.api('POST', `/api/matches/${id}/cancel`, {});
   assert.equal(ok.status, 200);
   assert.equal(ok.body.match.status, 'cancelled');
+});
+
+dbTest('tournament entry rules', async () => {
+  const org = await Client.registered('t_org');
+  const joe = await Client.registered('t_joe');
+  const created = await org.api('POST', '/api/tournaments', { name: 'Rules Cup' });
+  assert.equal(created.status, 201);
+  const id = created.body.tournament.id;
+  assert.equal(created.body.tournament.status, 'registration');
+
+  assert.equal((await new Client().api('POST', `/api/tournaments/${id}/entry`, { code: random })).status, 401);
+  assert.equal((await joe.api('POST', `/api/tournaments/${id}/entry`, { code: 'nope(' })).status, 422);
+  assert.equal((await joe.api('POST', `/api/tournaments/${id}/entry`, { code: random })).body.result, 'joined');
+  assert.equal((await joe.api('POST', `/api/tournaments/${id}/entry`, { code: greedy })).body.result, 'updated');
+  assert.equal((await org.api('POST', `/api/tournaments/${id}/start`, {})).status, 409, 'needs 2 players');
+  assert.equal((await joe.api('POST', `/api/tournaments/${id}/start`, {})).status, 403, 'only the organizer');
+  assert.equal((await joe.api('POST', `/api/tournaments/${id}/leave`, {})).status, 200);
+  assert.equal((await org.api('GET', `/api/tournaments/${id}`)).body.entrants.length, 0);
+  assert.equal((await org.api('POST', `/api/tournaments/${id}/cancel`, {})).status, 200);
+  assert.equal((await joe.api('POST', `/api/tournaments/${id}/entry`, { code: random })).status, 409);
+});
+
+dbTest('two tournaments run side by side, each with its own standings', { timeout: 120000 }, async () => {
+  const ann = await Client.registered('cup_ann');
+  const bob = await Client.registered('cup_bob');
+  const cy = await Client.registered('cup_cy');
+
+  const cupA = (await ann.api('POST', '/api/tournaments', { name: 'Cup A' })).body.tournament.id;
+  const cupB = (await bob.api('POST', '/api/tournaments', { name: 'Cup B' })).body.tournament.id;
+  for (const [client, code] of [
+    [ann, greedy],
+    [bob, random],
+    [cy, greedy],
+  ]) {
+    assert.equal((await client.api('POST', `/api/tournaments/${cupA}/entry`, { code })).status, 200);
+  }
+  await ann.api('POST', `/api/tournaments/${cupB}/entry`, { code: random });
+  await bob.api('POST', `/api/tournaments/${cupB}/entry`, { code: greedy });
+
+  assert.equal((await ann.api('POST', `/api/tournaments/${cupA}/start`, {})).status, 200);
+  assert.equal((await bob.api('POST', `/api/tournaments/${cupB}/start`, {})).status, 200);
+  assert.equal((await cy.api('POST', `/api/tournaments/${cupA}/entry`, { code: random })).status, 409, 'entries close at the start');
+
+  const list = (await ann.api('GET', '/api/tournaments')).body.tournaments;
+  assert.ok(list.filter((t) => t.id === cupA || t.id === cupB).every((t) => t.status === 'running'));
+
+  const finished = async (id) => {
+    for (let i = 0; i < 1100; i++) {
+      const { body } = await ann.api('GET', `/api/tournaments/${id}`);
+      if (body.status === 'finished') return body;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error(`tournament ${id} did not finish`);
+  };
+  const [a, b] = await Promise.all([finished(cupA), finished(cupB)]);
+
+  // Cup A: 3 players → 3 rounds of one match (someone sits out each round), 4 games each.
+  assert.equal(a.rounds.length, 3);
+  const aMatches = a.rounds.flatMap((r) => r.matches);
+  assert.equal(aMatches.length, 3);
+  for (const m of aMatches) {
+    assert.equal(m.gamesPlayed, 4);
+    assert.equal(m.aWins + m.bWins + m.draws, 4);
+    assert.deepEqual(
+      m.games.map((g) => g.red),
+      ['a', 'b', 'a', 'b'],
+    );
+  }
+  assert.equal(a.standings.length, 3);
+  assert.ok(a.standings.every((row) => row.mp === 2 && row.gd === row.gw - row.gl));
+  const decisive = aMatches.filter((m) => m.aWins !== m.bWins).length;
+  assert.equal(
+    a.standings.reduce((sum, row) => sum + row.pts, 0),
+    3 * decisive + 2 * (aMatches.length - decisive),
+  );
+  assert.equal(a.champion.username, a.standings[0].username);
+
+  // Cup B is separate: 2 players, one match, its own table.
+  assert.deepEqual(a.standings.map((r) => r.username).sort(), ['cup_ann', 'cup_bob', 'cup_cy']);
+  assert.deepEqual(b.standings.map((r) => r.username).sort(), ['cup_ann', 'cup_bob']);
+  assert.ok(b.standings.every((row) => row.mp === 1));
+  assert.equal(b.rounds.flatMap((r) => r.matches).length, 1);
+
+  // In the saved games, player A really was Red in games 1 and 3 and Blue in 2 and 4.
+  const { rows } = await db.pool.query(
+    `SELECT g.game_number, g.p1_user_id, m.player_a, m.player_b
+       FROM matches g JOIN tournament_matches m ON m.id = g.tournament_match_id
+      WHERE m.tournament_id = ANY($1::bigint[])`,
+    [[cupA, cupB]],
+  );
+  assert.equal(rows.length, 16);
+  for (const row of rows) {
+    assert.equal(row.p1_user_id, row.game_number % 2 === 1 ? row.player_a : row.player_b);
+  }
+});
+
+dbTest('profile records count wins, draws and losses against other players', async () => {
+  const accounts = new Accounts(db, config);
+  const [x, y] = await Promise.all(['rec_x', 'rec_y'].map((n) => accounts.create(n, 'password123')));
+  let id = 900000;
+  const play = (a, b, winner) =>
+    db.recordMatch({
+      id: id++,
+      name: 'record',
+      players: [
+        { userId: a.id, name: a.username },
+        { userId: b.id, name: b.username },
+      ],
+      winner,
+      reason: winner === 0 ? 'turn-limit' : 'target',
+      plies: 10,
+      startedAt: Date.now(),
+      finishedAt: Date.now(),
+    });
+  assert.deepEqual(await play(x, y, 0), { rated: true });
+  await play(x, y, 1);
+  await play(y, x, 1);
+  assert.deepEqual(await play(x, x, 1), { rated: false }, 'playing yourself is practice');
+  const { user } = await db.profile('rec_x');
+  assert.deepEqual([user.games, user.wins, user.draws, user.losses], [3, 1, 1, 1]);
+});
+
+dbTest('starting a tournament starts all of its games at once', async () => {
+  const started = [];
+  const fakeArena = {
+    nextId: 800000,
+    matches: new Map(),
+    startGame(options) {
+      const game = { id: this.nextId++, status: 'running' };
+      this.matches.set(game.id, game);
+      started.push(options);
+      return game;
+    },
+  };
+  const manager = new Tournaments({ db, arena: fakeArena });
+  const accounts = new Accounts(db, config);
+  const players = await Promise.all(['sim_a', 'sim_b', 'sim_c'].map((n) => accounts.create(n, 'password123')));
+  const t = await manager.create(players[0], { name: 'All at once' });
+  for (const p of players) await db.saveTournamentEntry(t.id, p.id, random, 16);
+  await manager.start(players[0], t.id);
+  await manager.advance(t.id);
+
+  // 3 players → 3 matches × 4 games, all started together, colours alternating.
+  assert.equal(started.length, 12);
+  const byMatch = new Map();
+  for (const game of started) {
+    if (!byMatch.has(game.tournament.matchId)) byMatch.set(game.tournament.matchId, []);
+    byMatch.get(game.tournament.matchId).push(game);
+  }
+  assert.equal(byMatch.size, 3);
+  for (const games of byMatch.values()) {
+    games.sort((g, h) => g.tournament.gameNumber - h.tournament.gameNumber);
+    assert.deepEqual(
+      games.map((g) => g.tournament.gameNumber),
+      [1, 2, 3, 4],
+    );
+    const a = games[0].tournament.playerA;
+    assert.deepEqual(
+      games.map((g) => g.players[0].userId === a),
+      [true, false, true, false],
+    );
+  }
+
+  // Advancing again doesn't start anything twice, and the page shows 12 live games.
+  await manager.advance(t.id);
+  assert.equal(started.length, 12);
+  const detail = await manager.detail(t.id);
+  assert.equal(detail.liveGames, 12);
+  assert.ok(detail.rounds.flatMap((r) => r.matches).every((m) => m.status === 'playing'));
+  await manager.cancel(players[0], t.id);
 });
 
 dbTest('match numbers continue after a restart', async () => {

@@ -1,13 +1,16 @@
 import { $, el, fill, icon, toast, timeAgo, clock, api, copyText } from './ui.js';
 import { AuthDialog } from './auth.js';
 import { Board } from './board.js';
-import { renderProfile, renderRanking } from './ranking.js';
+import { renderProfile } from './profile.js';
 import { SubmitDialog } from './submit.js';
+import { renderTournament, renderTournamentList } from './tournaments.js';
 
 const OTT = window.OTT;
 const COLOR = { 1: 'Red', 2: 'Blue' };
 const REPLAY_STEP_MS = 520;
-const VIEWS = ['home', 'match', 'ranking', 'user', 'docs'];
+const VIEWS = ['home', 'match', 'user', 'tournaments', 'tournament', 'docs'];
+// Views whose content is fetched from the API when shown.
+const PAGE_VIEWS = new Set(['user', 'tournaments', 'tournament']);
 
 const app = {
   matches: [],
@@ -48,7 +51,6 @@ function renderAccount() {
       { class: 'user-chip', href: `#/user/${encodeURIComponent(app.me.username)}`, title: 'Your profile' },
       el('span', { class: 'avatar' }, app.me.username.slice(0, 1)),
       el('span', { class: 'uc-name' }, app.me.username),
-      el('span', { class: 'uc-rating' }, app.me.rating),
     ),
     el('button', { class: 'icon-btn', type: 'button', title: 'Log out', 'aria-label': 'Log out', onclick: logout }, icon('logout')),
   );
@@ -64,12 +66,7 @@ function setMe(user) {
     renderResult();
     renderOverlay();
   }
-  if (app.route.view === 'ranking' || app.route.view === 'user') renderPage();
-}
-
-async function refreshMe() {
-  const { ok, data } = await api('GET', '/api/auth/me');
-  if (ok) setMe(data.user);
+  if (PAGE_VIEWS.has(app.route.view)) renderPage();
 }
 
 async function logout() {
@@ -92,7 +89,7 @@ function openJoin(summary) {
   whenLoggedIn('Log in or create an account to join this match.', () => dialog.open({ me: app.me, mode: 'join', match: summary }));
 }
 
-// Rated results change the ranking and the logged-in user's rating.
+// Finished games against other players change those players' profile records.
 const seenResults = new Set();
 let lobbyLoaded = false;
 
@@ -107,14 +104,109 @@ function noticeResults(list) {
     if (mySeat(m)) mine = true;
   }
   lobbyLoaded = true;
-  if (mine) refreshMe();
-  else if (changed && (app.route.view === 'ranking' || app.route.view === 'user')) renderPage();
+  if ((changed || mine) && app.route.view === 'user') renderPage();
 }
 
 function renderPage() {
   const context = { me: app.me, liveIds: new Set(app.matches.map((m) => m.id)) };
-  if (app.route.view === 'ranking') renderRanking($('#ranking-body'), context);
-  if (app.route.view === 'user') renderProfile($('#user-body'), app.route.id, context);
+  const { view, id } = app.route;
+  if (view === 'user') renderProfile($('#user-body'), id, context);
+  if (view === 'tournaments') renderTournamentList($('#tournaments-body'), { onCreate: openNewTournament });
+  if (view === 'tournament') renderTournament($('#tournament-body'), id, { ...context, actions: tournamentActions });
+}
+
+// ---------- Tournaments ----------
+
+function openNewTournament() {
+  whenLoggedIn('Log in or create an account to organize a tournament.', () => {
+    const dialogEl = $('#tournament-dialog');
+    $('#tournament-form').reset();
+    $('#td-error').hidden = true;
+    dialogEl.showModal();
+    $('#tournament-form').elements.name.focus();
+  });
+}
+
+async function postTournament(t, action) {
+  const { ok, status, data } = await api('POST', `/api/tournaments/${t.id}/${action}`, {});
+  if (status === 401) {
+    setMe(null);
+    auth.open({ reason: 'Your session has ended. Log in again to continue.' });
+    return false;
+  }
+  if (!ok) toast(data?.error || 'Something went wrong.', 'bad');
+  return ok;
+}
+
+const tournamentActions = {
+  enter(t, update) {
+    whenLoggedIn('Log in or create an account to enter this tournament.', () =>
+      dialog.open({
+        me: app.me,
+        mode: 'tournament',
+        tournament: t,
+        update,
+        onDone: ({ result }) => {
+          toast(result === 'updated' ? 'Your bot was updated.' : `You're in ${t.name}!`);
+          renderPage();
+        },
+      }),
+    );
+  },
+  async leave(t) {
+    if (!confirm(`Leave ${t.name}?`)) return;
+    if (await postTournament(t, 'leave')) toast(`You left ${t.name}.`);
+    renderPage();
+  },
+  async start(t) {
+    const n = t.entrants.length;
+    const matches = (n * (n - 1)) / 2;
+    if (!confirm(`Start ${t.name} now? Entries close and ${matches} ${matches === 1 ? 'match' : 'matches'} (${matches * t.gamesPerMatch} games) will be played.`)) return;
+    if (await postTournament(t, 'start')) toast(`${t.name} has started.`);
+    renderPage();
+  },
+  async cancel(t) {
+    if (!confirm(`Cancel ${t.name}? No more games will be played, and this can't be undone.`)) return;
+    if (await postTournament(t, 'cancel')) toast(`${t.name} was cancelled.`);
+    renderPage();
+  },
+};
+
+function wireTournamentDialog() {
+  const dialogEl = $('#tournament-dialog');
+  const form = $('#tournament-form');
+  for (const button of dialogEl.querySelectorAll('[data-close]')) button.addEventListener('click', () => dialogEl.close());
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const submit = $('#td-submit');
+    submit.disabled = true;
+    const { ok, status, data } = await api('POST', '/api/tournaments', { name: form.elements.name.value });
+    submit.disabled = false;
+    if (status === 401) {
+      dialogEl.close();
+      setMe(null);
+      auth.open({ reason: 'Your session has ended. Log in again to continue.' });
+      return;
+    }
+    if (!ok) {
+      $('#td-error').textContent = data?.error || 'Something went wrong.';
+      $('#td-error').hidden = false;
+      return;
+    }
+    dialogEl.close();
+    toast(`${data.tournament.name} is open for entries.`);
+    location.hash = `#/tournament/${data.tournament.id}`;
+  });
+  for (const button of document.querySelectorAll('[data-action="new-tournament"]')) button.addEventListener('click', openNewTournament);
+}
+
+// Pushed by the server whenever a tournament changes; refresh whatever shows it.
+let tournamentRefresh = null;
+function onTournamentChanged({ id }) {
+  const { view, id: shown } = app.route;
+  if (!(view === 'tournaments' || (view === 'tournament' && shown === id))) return;
+  clearTimeout(tournamentRefresh);
+  tournamentRefresh = setTimeout(renderPage, 150);
 }
 
 // ---------- Live stream ----------
@@ -141,6 +233,7 @@ const stream = {
     on('update', (summary) => onUpdate(summary));
     on('move', (payload) => onMove(payload));
     on('log', (entry) => onLog(entry));
+    on('tournament', (payload) => onTournamentChanged(payload));
     source.addEventListener('open', () => setConnection(true));
     source.addEventListener('error', () => setConnection(false));
   },
@@ -161,7 +254,9 @@ function parseRoute() {
   if (match) return { view: 'match', id: Number(match[1]) };
   const user = /^user\/([^/?#]+)/.exec(hash);
   if (user) return { view: 'user', id: decodeURIComponent(user[1]) };
-  if (hash.startsWith('ranking')) return { view: 'ranking', id: null };
+  const tournament = /^tournament\/(\d+)/.exec(hash);
+  if (tournament) return { view: 'tournament', id: Number(tournament[1]) };
+  if (hash.startsWith('tournaments')) return { view: 'tournaments', id: null };
   if (hash.startsWith('docs')) return { view: 'docs', id: null };
   return { view: 'home', id: null };
 }
@@ -169,8 +264,9 @@ function parseRoute() {
 const TITLES = {
   home: () => 'OTTv2 Arena',
   match: (id) => `Match #${id} · OTTv2`,
-  ranking: () => 'Ranking · OTTv2',
   user: (id) => `${id} · OTTv2`,
+  tournaments: () => 'Tournaments · OTTv2',
+  tournament: (id) => `Tournament #${id} · OTTv2`,
   docs: () => 'Bot library · OTTv2',
 };
 
@@ -180,14 +276,15 @@ function onRoute() {
   const { view, id } = app.route;
   document.body.dataset.view = view;
   for (const name of VIEWS) $(`#view-${name}`).hidden = name !== view;
-  for (const link of document.querySelectorAll('[data-nav]')) link.classList.toggle('active', link.dataset.nav === view);
+  const section = view === 'tournament' ? 'tournaments' : view;
+  for (const link of document.querySelectorAll('[data-nav]')) link.classList.toggle('active', link.dataset.nav === section);
 
   if (view === 'match') {
     if (!app.match || app.match.id !== id) openMatch(id);
   } else {
     closeMatch();
   }
-  if (view === 'ranking' || view === 'user') renderPage();
+  if (PAGE_VIEWS.has(view)) renderPage();
   stream.connect(view === 'match' ? id : null);
   renderLobby();
   if (previous.view !== view || previous.id !== id) window.scrollTo(0, 0);
@@ -438,8 +535,18 @@ function renderHeader() {
   $('#m-title').replaceChildren(el('span', { class: 'mid' }, `#${summary.id} `), summary.name);
 
   const meta = [statusPill(summary)];
-  if (isRated(summary)) meta.push(el('span', {}, 'Rated'));
-  else if (summary.players.every(Boolean)) meta.push(el('span', {}, 'Practice'));
+  const t = summary.tournament;
+  if (t) {
+    meta.push(
+      el(
+        'a',
+        { class: 'meta-i', href: `#/tournament/${t.id}`, style: 'font-weight:600;text-decoration:none' },
+        icon('trophy'),
+        `${t.name} · Round ${t.round} · Game ${t.gameNumber} of ${t.gamesPerMatch}`,
+      ),
+    );
+  }
+  if (summary.players.some((p) => p?.house)) meta.push(el('span', {}, 'Practice'));
   if (summary.watchers) meta.push(el('span', { class: 'meta-i' }, icon('eye'), `${summary.watchers} watching`));
   if (summary.startedAt) meta.push(el('span', {}, `Started ${clock(summary.startedAt)}`));
   else meta.push(el('span', {}, `Created ${timeAgo(summary.createdAt)}`));
@@ -452,29 +559,6 @@ function renderHeader() {
   $('#m-cancel').hidden = !(seat && (summary.status === 'waiting' || summary.status === 'queued'));
 }
 
-/** Two different registered players: the result will move the ranking. */
-function isRated(summary) {
-  if (summary.status === 'finished') return Boolean(summary.result?.rated);
-  const [p1, p2] = summary.players;
-  return Boolean(p1?.userId && p2?.userId && p1.userId !== p2.userId);
-}
-
-function signed(n) {
-  return `${n >= 0 ? '+' : '−'}${Math.abs(n)}`;
-}
-
-/** "Rating 1016", or "1000 → 1016 (+16)" once a rated match is over. */
-function ratingLine(summary, seat) {
-  const player = summary.players[seat - 1];
-  if (!player) return null;
-  if (player.house) return 'House bot · unrated';
-  const change = summary.result?.ratings?.[seat];
-  if (change) {
-    const diff = change.after - change.before;
-    return el('span', {}, `Rating ${change.before} → ${change.after} `, el('span', { class: `delta ${diff >= 0 ? 'up' : 'down'}` }, signed(diff)));
-  }
-  return player.rating ? `Rating ${player.rating}` : null;
-}
 
 function countsAt(frame) {
   const counts = { 1: { total: 0 }, 2: { total: 0 } };
@@ -507,12 +591,10 @@ function renderPlayers() {
       : player.userId
         ? el('a', { href: `#/user/${encodeURIComponent(player.name)}`, style: 'text-decoration:none' }, player.name)
         : player.name;
-    const rating = ratingLine(summary, seat);
     fill(
       card,
       el('div', { class: 'pc-name' }, el('i', { class: `dot p${seat}` }), el('b', {}, name), ...tags),
       el('div', { class: 'pc-seat' }, `P${seat} · ${COLOR[seat]} · goal ${OTT.TARGETS[seat]}`),
-      rating ? el('div', { class: 'pc-rating' }, rating) : null,
       el(
         'div',
         { class: 'pc-counts' },
@@ -558,24 +640,12 @@ function renderResult() {
   else if (seat && !summary.players.every((p) => isMe(p))) headline = seat === result.winner ? 'Your bot won!' : 'Your bot lost';
   else headline = `${playerName(summary, result.winner)} wins`;
 
-  let ratings = null;
-  if (result.rated && result.ratings) {
-    const part = (s) => {
-      const { before, after } = result.ratings[s];
-      return `${playerName(summary, s)} ${before} → ${after} (${signed(after - before)})`;
-    };
-    ratings = seat
-      ? `Your rating: ${result.ratings[seat].before} → ${result.ratings[seat].after} (${signed(result.ratings[seat].after - result.ratings[seat].before)})`
-      : `Ratings: ${part(1)} · ${part(2)}`;
-  } else if (summary.status === 'finished') {
-    ratings = 'Practice game: ratings are unchanged.';
-  }
 
   box.className = `result${result.winner ? ` win${result.winner}` : ''}`;
   fill(
     box,
     el('span', { class: 'r-icon' }, icon(result.winner ? 'trophy' : 'alert')),
-    el('div', {}, el('strong', {}, headline), el('span', {}, result.message || ''), ratings ? el('span', { class: 'r-ratings' }, ratings) : null),
+    el('div', {}, el('strong', {}, headline), el('span', {}, result.message || '')),
   );
   box.hidden = false;
 }
@@ -617,8 +687,8 @@ function renderOverlay() {
           'p',
           {},
           seat
-            ? 'Your bot passed the check and is seated. Share the link. The match starts when another player joins with their bot, and the result will be rated.'
-            : `Submit your bot to take the ${COLOR[open]} seat. The match starts right away${host?.rating ? `, and it's rated (${host.name} is rated ${host.rating})` : ''}.`,
+            ? 'Your bot passed the check and is seated. Share the link. The match starts when another player joins with their bot.'
+            : `Submit your bot to take the ${COLOR[open]} seat. The match starts right away.`,
         ),
         el('div', { class: 'oc-actions' }, ...actions),
       ),
@@ -893,7 +963,7 @@ async function start() {
   auth = new AuthDialog({
     onLogin: (user, mode) => {
       setMe(user);
-      toast(mode === 'register' ? `Welcome, ${user.username}! Your rating starts at ${user.rating}.` : `Logged in as ${user.username}`);
+      toast(mode === 'register' ? `Welcome, ${user.username}!` : `Logged in as ${user.username}`);
     },
   });
   dialog = new SubmitDialog({
@@ -917,6 +987,7 @@ async function start() {
   }
 
   wireMatchControls();
+  wireTournamentDialog();
   renderDocs();
   window.addEventListener('hashchange', onRoute);
   onRoute();

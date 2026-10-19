@@ -93,10 +93,15 @@ function serveStatic(root, pathname, request, response) {
  * always receives the lobby, plus every event of the match it is watching.
  */
 class Hub {
-  constructor(arena) {
+  constructor(arena, tournaments) {
     this.arena = arena;
     this.clients = new Set();
     this.lobbyTimer = null;
+    this.changedTournaments = new Set();
+    this.tournamentTimer = null;
+
+    // Tournament pages re-fetch when told which tournament changed.
+    if (tournaments) tournaments.on('changed', (id) => this._queueTournament(id));
 
     arena.on('lobby', () => this._queueLobby());
     // Watchers need the dealt board, which summaries don't carry.
@@ -156,6 +161,19 @@ class Hub {
     for (const client of this.clients) if (client.watch === id) client.response.write(payload);
   }
 
+  _queueTournament(id) {
+    this.changedTournaments.add(id);
+    if (this.tournamentTimer) return;
+    this.tournamentTimer = setTimeout(() => {
+      this.tournamentTimer = null;
+      for (const changed of this.changedTournaments) {
+        const payload = `event: tournament\ndata: ${JSON.stringify({ id: changed })}\n\n`;
+        for (const client of this.clients) client.response.write(payload);
+      }
+      this.changedTournaments.clear();
+    }, LOBBY_THROTTLE_MS);
+  }
+
   // Moves arrive several times a second across all matches, so lobby updates
   // are batched.
   _queueLobby() {
@@ -170,15 +188,18 @@ class Hub {
 
 /**
  * The HTTP server: API routes, the live event stream, and the client's files.
- * `accounts` and `db` are optional; without them there is no login or ranking.
+ * `accounts`, `db` and `tournaments` are optional; without them there are no logins, profiles or tournaments.
  */
-function createServer({ arena, accounts = null, db = null, config }) {
-  const hub = new Hub(arena);
+function createServer({ arena, accounts = null, db = null, tournaments = null, config }) {
+  const hub = new Hub(arena, tournaments);
   const bodyLimit = config.maxCodeBytes + 16 * 1024;
 
   const currentUser = (req) => (accounts ? accounts.userFromCookie(req.headers.cookie) : null);
   const needAccounts = () => {
     if (!accounts) throw new ApiError(503, 'Accounts are not available on this server.');
+  };
+  const needTournaments = () => {
+    if (!tournaments) throw new ApiError(503, 'Tournaments are not available on this server.');
   };
 
   const routes = [
@@ -224,15 +245,7 @@ function createServer({ arena, accounts = null, db = null, config }) {
     ],
     ['GET', /^\/api\/auth\/me$/, async (req, res) => sendJson(res, 200, { user: await currentUser(req) })],
 
-    // ----- ranking
-    [
-      'GET',
-      /^\/api\/leaderboard$/,
-      async (req, res) => {
-        if (!db) throw new ApiError(503, 'The ranking is not available on this server.');
-        sendJson(res, 200, { players: await db.leaderboard(100) });
-      },
-    ],
+    // ----- player profiles
     [
       'GET',
       /^\/api\/users\/([A-Za-z0-9_-]{1,40})$/,
@@ -243,6 +256,52 @@ function createServer({ arena, accounts = null, db = null, config }) {
         sendJson(res, 200, profile);
       },
     ],
+
+    // ----- tournaments
+    [
+      'GET',
+      /^\/api\/tournaments$/,
+      async (req, res) => {
+        needTournaments();
+        sendJson(res, 200, { tournaments: await tournaments.list() });
+      },
+    ],
+    [
+      'POST',
+      /^\/api\/tournaments$/,
+      async (req, res) => {
+        needTournaments();
+        const body = await readJson(req, 4096);
+        sendJson(res, 201, { tournament: await tournaments.create(await currentUser(req), body) });
+      },
+    ],
+    [
+      'GET',
+      /^\/api\/tournaments\/(\d+)$/,
+      async (req, res, [id]) => {
+        needTournaments();
+        sendJson(res, 200, await tournaments.detail(id));
+      },
+    ],
+    [
+      'POST',
+      /^\/api\/tournaments\/(\d+)\/entry$/,
+      async (req, res, [id]) => {
+        needTournaments();
+        const body = await readJson(req, bodyLimit);
+        sendJson(res, 200, { result: await tournaments.enter(await currentUser(req), id, body.code) });
+      },
+    ],
+    ...['leave', 'start', 'cancel'].map((action) => [
+      'POST',
+      new RegExp(`^/api/tournaments/(\\d+)/${action}$`),
+      async (req, res, [id]) => {
+        needTournaments();
+        await readJson(req, 4096);
+        await tournaments[action](await currentUser(req), id);
+        sendJson(res, 200, { ok: true });
+      },
+    ]),
 
     // ----- matches
     ['GET', /^\/api\/matches$/, (req, res) => sendJson(res, 200, arena.list())],

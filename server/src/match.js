@@ -31,15 +31,17 @@ function placement(tokens, player) {
  *   'log'    (entries)  new log entries
  *
  * `onFinish(match)` (optional, async) runs when the game ends, before the final
- * 'update'. It saves the result and may return { rated, ratings }.
+ * 'update'. It saves the result and may return { rated } (see Database.recordMatch).
+ * `tournament` is set for tournament games: { id, name, round, matchId, gameNumber, gamesPerMatch, playerA }.
  */
 class Match extends EventEmitter {
-  constructor({ id, name, config, onFinish = null }) {
+  constructor({ id, name, config, onFinish = null, tournament = null }) {
     super();
     this.id = id;
     this.name = name;
     this.config = config;
     this.onFinish = onFinish;
+    this.tournament = tournament;
     this.status = 'waiting'; // waiting → queued → running → finished | cancelled
     this.players = [null, null];
     this.game = null;
@@ -64,9 +66,9 @@ class Match extends EventEmitter {
   }
 
   /** Puts a player in `seat` (1 or 2): a registered user (userId) or a house bot (house). */
-  sit(seat, { name, code, house = null, userId = null, rating = null }) {
+  sit(seat, { name, code, house = null, userId = null }) {
     if (this.players[seat - 1]) throw new Error('That seat is already taken.');
-    this.players[seat - 1] = { seat, name, code, house, userId, rating, joinedAt: Date.now() };
+    this.players[seat - 1] = { seat, name, code, house, userId, joinedAt: Date.now() };
     this._log('system', `${name} sits down as P${seat} (${COLORS[seat]})${house ? ' — house bot' : ''}`);
     if (this.players.every(Boolean)) this.status = 'queued';
     this.emit('update');
@@ -176,24 +178,16 @@ class Match extends EventEmitter {
     const { game } = this;
     this.status = 'finished';
     this.finishedAt = Date.now();
-    this.result = { winner: game.winner, reason: game.reason, message: this._resultMessage(), rated: false, ratings: null };
+    this.result = { winner: game.winner, reason: game.reason, message: this._resultMessage(), rated: false };
     this._log('result', `Game over after ${game.ply} moves. ${this.result.message}`);
 
     if (this.onFinish) {
       try {
         const saved = await this.onFinish(this);
-        if (saved && saved.rated) {
-          this.result.rated = true;
-          this.result.ratings = saved.ratings;
-          const line = (seat) => {
-            const { before, after } = saved.ratings[seat];
-            return `${this.players[seat - 1].name} ${before} → ${after} (${after >= before ? '+' : ''}${after - before})`;
-          };
-          this._log('system', `Ratings: ${line(1)}, ${line(2)}`);
-        }
+        if (saved && saved.rated) this.result.rated = true;
       } catch (error) {
         console.error(`Match #${this.id}: could not save the result:`, error);
-        this._log('error', 'The result could not be saved to the database, so ratings were not updated.');
+        this._log('error', 'The result could not be saved to the database.');
       }
     }
 
@@ -283,12 +277,21 @@ class Match extends EventEmitter {
       id: this.id,
       name: this.name,
       status: this.status,
-      players: this.players.map((p) => (p ? { seat: p.seat, name: p.name, house: p.house, userId: p.userId, rating: p.rating } : null)),
+      players: this.players.map((p) => (p ? { seat: p.seat, name: p.name, house: p.house, userId: p.userId } : null)),
       ply: game ? game.ply : 0,
       turn: game ? game.turn : 1,
       maxPlies: game ? game.maxPlies : OTT.MAX_PLIES,
       tokens: { 1: counts(1), 2: counts(2) },
       result: this.result,
+      tournament: this.tournament
+        ? {
+            id: this.tournament.id,
+            name: this.tournament.name,
+            round: this.tournament.round,
+            gameNumber: this.tournament.gameNumber,
+            gamesPerMatch: this.tournament.gamesPerMatch,
+          }
+        : null,
       watchers: this.watchers,
       createdAt: this.createdAt,
       startedAt: this.startedAt,

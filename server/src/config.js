@@ -30,14 +30,17 @@ module.exports = Object.freeze({
   // Pause between moves so people can follow the game live. The bots themselves
   // usually answer in a few milliseconds.
   moveDelayMs: number('MOVE_DELAY_MS', 600),
+  // Tournaments play many games, so their games move a little faster by default.
+  tournamentMoveDelayMs: number('TOURNAMENT_MOVE_DELAY_MS', 300),
   moveTimeLimitMs: number('MOVE_TIME_LIMIT_MS', 1000),
   loadTimeLimitMs: number('LOAD_TIME_LIMIT_MS', 2000),
   botMemoryMb: number('BOT_MEMORY_MB', 64),
   maxCodeBytes: number('MAX_CODE_BYTES', 100 * 1024),
 
-  // Every running match holds two bot processes, so cap how many run at once.
-  // Extra matches wait in a queue.
-  maxRunningMatches: number('MAX_RUNNING_MATCHES', 8),
+  // Every running game holds two bot processes (about 110 MB together), so cap
+  // how many run at once. Extra games wait in a queue. 24 fits all the games of
+  // a 4-player tournament.
+  maxRunningMatches: number('MAX_RUNNING_MATCHES', 24),
   maxOpenMatches: number('MAX_OPEN_MATCHES', 50),
   keepFinishedMatches: number('KEEP_FINISHED_MATCHES', 30),
   waitingTimeoutMs: number('WAITING_TIMEOUT_MS', 30 * 60 * 1000),

@@ -65,27 +65,39 @@ export class SubmitDialog {
    * mode: 'create' | 'join'. For join, pass the match summary. `me` is the
    * logged-in user; the server seats you under that username.
    */
-  open({ me, mode = 'create', match = null, template = null }) {
+  open({ me, mode = 'create', match = null, template = null, tournament = null, update = false, onDone = null }) {
     this.mode = mode;
     this.match = match;
+    this.tournament = tournament;
+    this.onDone = onDone;
     const seat = mode === 'join' ? match.players.findIndex((p) => !p) + 1 : 1;
     this.seat = seat;
     const color = seat === 1 ? 'Red' : 'Blue';
     const host = mode === 'join' ? match.players[2 - seat] : null;
-    const rated = host && host.userId && host.userId !== me.id;
 
-    $('#sd-title').textContent = mode === 'join' ? `Join match #${match.id} · ${match.name}` : 'New match';
-    $('#sd-sub').textContent =
-      mode === 'join'
-        ? `You'll play as P${seat} (${color}) against ${host.name}. ${rated ? 'This game is rated.' : 'This game is practice and is not rated.'} It starts as soon as your bot is accepted.`
-        : `You'll play as P1 (Red) and move first. Wait for another player for a rated game, or practise against a house bot right away.`;
+    const titles = {
+      create: 'New match',
+      join: match ? `Join match #${match.id} · ${match.name}` : '',
+      tournament: tournament ? (update ? `Update your bot for ${tournament.name}` : `Enter ${tournament.name}`) : '',
+    };
+    const subtitles = {
+      create: `You'll play as P1 (Red) and move first. Wait for another player to join, or practise against a house bot right away.`,
+      join: host
+        ? `You'll play as P${seat} (${color}) against ${host.name}. It starts as soon as your bot is accepted.`
+        : '',
+      tournament: tournament
+        ? `This bot plays every other entrant in a ${tournament.gamesPerMatch}-game match, twice as Red and twice as Blue. Match win ${tournament.points.win} points, draw ${tournament.points.draw}, loss ${tournament.points.loss}. You can update it until the tournament starts.`
+        : '',
+    };
+    $('#sd-title').textContent = titles[mode];
+    $('#sd-sub').textContent = subtitles[mode];
     fill(
       $('#sd-as'),
       el('span', { class: 'avatar', style: 'width:24px;height:24px;font-size:11px' }, me.username.slice(0, 1)),
-      el('span', {}, 'Playing as ', el('b', {}, me.username), ` · rating ${me.rating}`),
+      el('span', {}, 'Playing as ', el('b', {}, me.username)),
     );
-    $('#sd-create-fields').hidden = mode === 'join';
-    this.submitButton.textContent = mode === 'join' ? `Join as P${seat}` : 'Create match';
+    $('#sd-create-fields').hidden = mode !== 'create';
+    this.submitButton.textContent = { create: 'Create match', join: `Join as P${seat}`, tournament: update ? 'Save bot' : 'Enter tournament' }[mode];
     this.submitButton.className = `btn ${mode === 'join' ? `p${seat}` : 'primary'}`;
     this.form.elements.name.placeholder = `Optional, e.g. ${me.username}'s match`;
 
@@ -115,7 +127,7 @@ export class SubmitDialog {
     );
     const opponent = $('#sd-opponent');
     opponent.replaceChildren(
-      el('option', { value: '' }, 'Another player (rated)'),
+      el('option', { value: '' }, 'Another player (wait in the lobby)'),
       ...this.examples.map((e) => el('option', { value: e.id, title: e.description }, `House bot: ${e.name} (practice)`)),
     );
   }
@@ -254,10 +266,12 @@ export class SubmitDialog {
     const values = this._readForm();
     if (!values) return;
     this._setBusy(true, 'Checking your bot…');
-    const { ok, status, data } =
-      this.mode === 'join'
-        ? await api('POST', `/api/matches/${this.match.id}/join`, { code: values.code })
-        : await api('POST', '/api/matches', values);
+    const request = {
+      create: () => api('POST', '/api/matches', values),
+      join: () => api('POST', `/api/matches/${this.match.id}/join`, { code: values.code }),
+      tournament: () => api('POST', `/api/tournaments/${this.tournament.id}/entry`, { code: values.code }),
+    }[this.mode];
+    const { ok, status, data } = await request();
     this._setBusy(false);
     if (this._sessionEnded(status)) return;
     if (!ok) {
@@ -266,6 +280,7 @@ export class SubmitDialog {
     }
     this.form.elements.name.value = '';
     this.close();
-    this.onSubmitted(data);
+    if (this.onDone) this.onDone(data);
+    else this.onSubmitted(data);
   }
 }

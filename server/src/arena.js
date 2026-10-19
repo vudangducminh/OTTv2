@@ -94,14 +94,14 @@ class Arena extends EventEmitter {
     if (open.length >= this.config.maxOpenMatches) {
       throw new ApiError(503, 'The arena is full right now. Try again when a match has finished.');
     }
-    if (open.filter((m) => m.seatOf(user.id)).length >= MAX_OPEN_PER_USER) {
+    if (open.filter((m) => !m.tournament && m.seatOf(user.id)).length >= MAX_OPEN_PER_USER) {
       throw new ApiError(429, `You already have ${MAX_OPEN_PER_USER} matches open. Wait for one to finish first.`);
     }
 
     await this._requireWorkingBot(code, 1);
 
     const match = this._register(new Match({ id: this.nextId++, name: matchName, config: this.config, onFinish: (m) => this._save(m) }));
-    match.sit(1, { name: user.username, code, userId: user.id, rating: user.rating });
+    match.sit(1, { name: user.username, code, userId: user.id });
     if (house) match.sit(2, { name: `${house.name} bot`, code: house.code, house: house.id });
     this._schedule();
     return { match, seat: 1 };
@@ -118,14 +118,45 @@ class Arena extends EventEmitter {
 
     // Someone may have taken the seat while the bot was being checked.
     if (match.openSeat !== seat) throw new ApiError(409, 'Someone else just took this seat.');
-    match.sit(seat, { name: user.username, code, userId: user.id, rating: user.rating });
+    match.sit(seat, { name: user.username, code, userId: user.id });
     this._schedule();
     return { match, seat };
+  }
+
+  /**
+   * Starts a game between two prepared players (used by tournaments).
+   * players: [{ userId, name, code }, …] in seat order (Red first).
+   * onDone(match, saved) runs once the result has been saved (saved = false if that failed).
+   */
+  startGame({ name, players, tournament = null, onDone = null }) {
+    const config = tournament ? { ...this.config, moveDelayMs: this.config.tournamentMoveDelayMs } : this.config;
+    const match = this._register(
+      new Match({
+        id: this.nextId++,
+        name,
+        config,
+        tournament,
+        onFinish: async (m) => {
+          let saved = false;
+          try {
+            const result = await this._save(m);
+            saved = true;
+            return result;
+          } finally {
+            if (onDone) setImmediate(() => onDone(m, saved));
+          }
+        },
+      }),
+    );
+    players.forEach((player, index) => match.sit(index + 1, player));
+    this._schedule();
+    return match;
   }
 
   cancel(id, user) {
     requireUser(user);
     const match = this.get(id);
+    if (match.tournament) throw new ApiError(403, 'Tournament games cannot be cancelled.');
     if (!match.seatOf(user.id)) throw new ApiError(403, 'Only a player in this match can cancel it.');
     if (!match.cancel(`${user.username} cancelled the match`)) {
       throw new ApiError(409, 'The match has already started, so it can no longer be cancelled.');
@@ -151,6 +182,14 @@ class Arena extends EventEmitter {
       plies: match.game.ply,
       startedAt: match.startedAt,
       finishedAt: match.finishedAt,
+      tournament: match.tournament
+        ? {
+            matchId: match.tournament.matchId,
+            gameNumber: match.tournament.gameNumber,
+            playerA: match.tournament.playerA,
+            gamesPerMatch: match.tournament.gamesPerMatch,
+          }
+        : null,
     });
   }
 

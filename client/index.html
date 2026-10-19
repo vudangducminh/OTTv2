@@ -78,9 +78,6 @@
       <symbol id="i-alert" viewBox="0 0 24 24">
         <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9" /><path d="M12 7.5v5.5M12 16.5v.01" /></g>
       </symbol>
-      <symbol id="i-chart" viewBox="0 0 24 24">
-        <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 20h16M6.5 20v-6h3v6M10.5 20V8h3v12M14.5 20v-9h3v9" />
-      </symbol>
       <symbol id="i-logout" viewBox="0 0 24 24">
         <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M10 4.5H6.5A1.5 1.5 0 0 0 5 6v12a1.5 1.5 0 0 0 1.5 1.5H10M15 16l4-4-4-4M19 12H9.5" />
       </symbol>
@@ -97,7 +94,7 @@
       </a>
       <nav class="topnav">
         <span class="conn" id="conn" title="Connection to the server"><i></i><span>Connecting…</span></span>
-        <a class="btn ghost nav-link" href="#/ranking" data-nav="ranking"><svg class="ui-i"><use href="#i-chart" /></svg><span>Ranking</span></a>
+        <a class="btn ghost nav-link" href="#/tournaments" data-nav="tournaments"><svg class="ui-i"><use href="#i-trophy" /></svg><span>Tournaments</span></a>
         <a class="btn ghost nav-link" href="#/docs" data-nav="docs"><svg class="ui-i"><use href="#i-book" /></svg><span>Bot library</span></a>
         <div class="account" id="account"></div>
         <button class="btn primary" type="button" data-action="new-match"><svg class="ui-i"><use href="#i-plus" /></svg><span>New match</span></button>
@@ -233,22 +230,30 @@
           </div>
         </section>
 
-        <!-- Ranking -->
-        <section id="view-ranking" class="view" hidden>
-          <div class="page-head">
-            <p class="eyebrow">Rank standing</p>
-            <h1>Ranking</h1>
-            <p class="lead">
-              Everyone starts at 1000. Each rated game moves both players' ratings, and beating a higher-rated player is worth more.
-              Games between two players with accounts are rated. Games against a house bot or against yourself are practice and don't count.
-            </p>
-          </div>
-          <div id="ranking-body"></div>
-        </section>
-
         <!-- Player profile -->
         <section id="view-user" class="view" hidden>
           <div id="user-body"></div>
+        </section>
+
+        <!-- Tournaments -->
+        <section id="view-tournaments" class="view" hidden>
+          <div class="page-head with-action">
+            <div>
+              <p class="eyebrow">Round robin</p>
+              <h1>Tournaments</h1>
+              <p class="lead">
+                Everyone plays everyone once. Each match is 4 games, and each player is Red twice and Blue twice, alternating.
+                Win the match (win more of its games) for 3 points, draw it for 1, lose it for 0. GD is games won minus games lost.
+              </p>
+            </div>
+            <button class="btn primary" type="button" data-action="new-tournament"><svg class="ui-i"><use href="#i-plus" /></svg>New tournament</button>
+          </div>
+          <div id="tournaments-body"></div>
+        </section>
+
+        <!-- One tournament -->
+        <section id="view-tournament" class="view" hidden>
+          <div id="tournament-body"></div>
         </section>
 
         <!-- Docs -->
@@ -305,7 +310,8 @@ function move(game) {
               <li>When you submit, the server checks your bot on a test board. If it doesn't load or can't make a legal first move, you get the error right away, with a line number.</li>
               <li>During the match each bot runs in its own sandboxed process. It has <b><span data-config="moveTimeLimitMs">1000</span> ms per move</b> and <b><span data-config="botMemoryMb">64</span> MB of memory</b>, with no network or file access. Top-level variables persist between turns, so you can keep state across moves.</li>
               <li>If a bot throws an error, runs out of time or memory, or returns an illegal move, it <b>forfeits</b>. The reason is written to the log.</li>
-              <li>You need an account to submit a bot. A game between two different players with accounts is <b>rated</b> and moves both players on the <a href="#/ranking">ranking</a>. Games against house bots or yourself are practice.</li>
+              <li>You need an account to submit a bot. Your profile keeps a record of your games against other players. Games against house bots or yourself are practice. Points and standings exist only inside <a href="#/tournaments">tournaments</a>.</li>
+              <li>In a <a href="#/tournaments">tournament</a> your bot plays every other entrant in a match of 4 games, alternating Red, Blue, Red, Blue. Winning more of the 4 games wins the match (3 points). Equal is a draw (1 point), and fewer is a loss (0). Your bot can tell which colour it has from <code>game.me</code>.</li>
               <li>Output from <code>console.log</code> goes into the match's server log (up to 20 lines per turn). <code>console.log(game.toString())</code> prints the board.</li>
               <li>The game ends when a token reaches the opposite corner, when one side has no tokens left, or when the player to move has no legal moves (that player loses). After <b>600 moves</b>, the player with more tokens wins. Equal counts are a draw.</li>
             </ul>
@@ -449,6 +455,30 @@ node server/tools/play.js my-bot.js library/examples/random.js --games 20</code>
           <span class="spacer"></span>
           <button class="btn" type="button" data-close>Cancel</button>
           <button class="btn primary" type="submit" id="ad-submit">Log in</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog class="dialog narrow" id="tournament-dialog" aria-labelledby="td-title">
+      <form id="tournament-form" novalidate>
+        <header class="dialog-head">
+          <div>
+            <h2 id="td-title">New tournament</h2>
+            <p class="muted">Round robin, 4 games per match. Players enter with a bot, and you start it when everyone is in.</p>
+          </div>
+          <button class="icon-btn" type="button" data-close aria-label="Close"><svg><use href="#i-close" /></svg></button>
+        </header>
+        <div class="dialog-body">
+          <label class="field">
+            <span>Tournament name</span>
+            <input name="name" maxlength="40" autocomplete="off" placeholder="e.g. Spring Cup" />
+          </label>
+          <div class="check bad" id="td-error" hidden></div>
+        </div>
+        <footer class="dialog-foot">
+          <span class="spacer"></span>
+          <button class="btn" type="button" data-close>Cancel</button>
+          <button class="btn primary" type="submit" id="td-submit">Create tournament</button>
         </footer>
       </form>
     </dialog>

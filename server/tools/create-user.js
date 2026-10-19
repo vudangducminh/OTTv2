@@ -30,7 +30,7 @@ if (!username || !password) {
       console.log(`Password updated for ${user.username}. Their existing logins were signed out.`);
     } else {
       const user = await accounts.create(username, password);
-      console.log(`Created account ${user.username} (id ${user.id}, rating ${user.rating}).`);
+      console.log(`Created account ${user.username} (id ${user.id}).`);
     }
   } catch (error) {
     console.error(`Error: ${error.message}`);

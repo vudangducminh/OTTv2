@@ -1,7 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { Pool } = require('pg');
-const { rate } = require('./ratings');
 
 const SCHEMA = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
 
@@ -12,7 +11,6 @@ function publicUser(row) {
   return {
     id: Number(row.id),
     username: row.username,
-    rating: row.rating,
     games: row.games,
     wins: row.wins,
     losses: row.losses,
@@ -38,8 +36,6 @@ function matchForUser(row, userId) {
     reason: row.reason,
     plies: row.plies,
     rated: row.rated,
-    ratingBefore: row[`p${seat}_rating_before`],
-    ratingAfter: row[`p${seat}_rating_after`],
     finishedAt: row.finished_at.getTime(),
   };
 }
@@ -165,7 +161,7 @@ class Database {
     await this.pool.query('DELETE FROM sessions WHERE expires_at <= now()');
   }
 
-  // ---------- Matches and ratings ----------
+  // ---------- Games ----------
 
   /** Match numbers continue from the last saved match. */
   async nextMatchId() {
@@ -174,50 +170,60 @@ class Database {
   }
 
   /**
-   * Saves a finished match and, when it is rated, updates both players'
-   * ratings and records in the same transaction. A match is rated when two
-   * different registered players play it to a result.
+   * Saves a finished game. When two different registered players played it to
+   * a result, both players' win/draw/loss records are updated in the same
+   * transaction (games against house bots or yourself are practice).
    *
-   * match: { id, name, players: [{ userId, name }, { userId, name }], winner, reason, plies, startedAt, finishedAt }
-   * Returns { rated, ratings: { 1: { before, after }, 2: { before, after } } | null }.
+   * match: { id, name, players: [{ userId, name }, { userId, name }], winner, reason, plies, startedAt, finishedAt,
+   *          tournament?: { matchId, gameNumber, playerA, gamesPerMatch } }
+   * A tournament game also adds its result to its tournament match, in the same transaction.
+   * Returns { rated }: whether it counted toward the players' records.
    */
   async recordMatch(match) {
     const [p1, p2] = match.players;
-    if (!p1.userId && !p2.userId) return { rated: false, ratings: null };
+    if (!p1.userId && !p2.userId) return { rated: false };
     const decided = match.winner === 0 || match.winner === 1 || match.winner === 2;
-    const wantsRating = Boolean(p1.userId && p2.userId && p1.userId !== p2.userId && decided && match.reason !== 'error');
+    const counts = Boolean(p1.userId && p2.userId && p1.userId !== p2.userId && decided && match.reason !== 'error');
 
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      let before = null;
-      let after = null;
-      if (wantsRating) {
-        // Lock both rows (in id order, so two concurrent results can't deadlock).
-        const { rows } = await client.query('SELECT id, rating FROM users WHERE id = ANY($1::bigint[]) ORDER BY id FOR UPDATE', [
+      let rated = false;
+      if (counts) {
+        // Lock both rows in id order, so two results for the same players at once can't deadlock.
+        const { rows } = await client.query('SELECT id FROM users WHERE id = ANY($1::bigint[]) ORDER BY id FOR UPDATE', [
           [p1.userId, p2.userId],
         ]);
-        const current = new Map(rows.map((row) => [Number(row.id), row.rating]));
-        if (current.size === 2) {
-          before = [current.get(p1.userId), current.get(p2.userId)];
-          after = rate(before[0], before[1], match.winner === 1 ? 1 : match.winner === 2 ? 0 : 0.5);
+        if (rows.length === 2) {
+          rated = true;
           for (const [index, player] of [p1, p2].entries()) {
             const seat = index + 1;
-            const draw = match.winner === 0;
-            const win = match.winner === seat;
+            const result = match.winner === 0 ? 'draw' : match.winner === seat ? 'win' : 'loss';
             await client.query(
-              `UPDATE users
-                  SET rating = $2, games = games + 1, wins = wins + $3, losses = losses + $4, draws = draws + $5
-                WHERE id = $1`,
-              [player.userId, after[index], win ? 1 : 0, !win && !draw ? 1 : 0, draw ? 1 : 0],
+              'UPDATE users SET games = games + 1, wins = wins + $2, losses = losses + $3, draws = draws + $4 WHERE id = $1',
+              [player.userId, result === 'win' ? 1 : 0, result === 'loss' ? 1 : 0, result === 'draw' ? 1 : 0],
             );
           }
         }
       }
+      const tournament = match.tournament || null;
+      if (tournament) {
+        // Credit the game to the tournament match it belongs to.
+        const winnerId = match.winner === 1 ? p1.userId : match.winner === 2 ? p2.userId : null;
+        const aWon = winnerId !== null && winnerId === tournament.playerA;
+        const bWon = winnerId !== null && !aWon;
+        await client.query(
+          `UPDATE tournament_matches
+              SET a_wins = a_wins + $2, b_wins = b_wins + $3, draws = draws + $4, games_played = games_played + 1,
+                  finished_at = CASE WHEN games_played + 1 >= $5 THEN now() ELSE finished_at END
+            WHERE id = $1`,
+          [tournament.matchId, aWon ? 1 : 0, bWon ? 1 : 0, winnerId === null ? 1 : 0, tournament.gamesPerMatch],
+        );
+      }
       await client.query(
         `INSERT INTO matches (id, name, p1_user_id, p2_user_id, p1_name, p2_name, winner, reason, plies, rated,
-                              p1_rating_before, p1_rating_after, p2_rating_before, p2_rating_after, started_at, finished_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, to_timestamp($15 / 1000.0), to_timestamp($16 / 1000.0))`,
+                              started_at, finished_at, tournament_match_id, game_number)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, to_timestamp($11 / 1000.0), to_timestamp($12 / 1000.0), $13, $14)`,
         [
           match.id,
           match.name,
@@ -228,20 +234,15 @@ class Database {
           decided ? match.winner : null,
           match.reason || 'error',
           match.plies,
-          Boolean(after),
-          before ? before[0] : null,
-          after ? after[0] : null,
-          before ? before[1] : null,
-          after ? after[1] : null,
+          rated,
           match.startedAt,
           match.finishedAt,
+          tournament ? tournament.matchId : null,
+          tournament ? tournament.gameNumber : null,
         ],
       );
       await client.query('COMMIT');
-      return {
-        rated: Boolean(after),
-        ratings: after ? { 1: { before: before[0], after: after[0] }, 2: { before: before[1], after: after[1] } } : null,
-      };
+      return { rated };
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});
       throw error;
@@ -250,32 +251,11 @@ class Database {
     }
   }
 
-  /** Players with at least one rated game, best first. Equal ratings share a rank. */
-  async leaderboard(limit = 100) {
-    const { rows } = await this.pool.query(
-      `SELECT *, RANK() OVER (ORDER BY rating DESC) AS rank
-         FROM users
-        WHERE games > 0
-        ORDER BY rating DESC, wins DESC, lower(username)
-        LIMIT $1`,
-      [limit],
-    );
-    return rows.map((row) => ({ ...publicUser(row), rank: Number(row.rank) }));
-  }
-
-  /** { user (with rank and ranked), matches } or null. */
+  /** { user, matches } or null. */
   async profile(username, recent = 20) {
-    const { rows } = await this.pool.query(
-      `SELECT u.*,
-              (SELECT count(*) + 1 FROM users o WHERE o.games > 0 AND o.rating > u.rating) AS rank,
-              (SELECT count(*) FROM users o WHERE o.games > 0) AS ranked
-         FROM users u
-        WHERE lower(u.username) = lower($1)`,
-      [username],
-    );
+    const { rows } = await this.pool.query('SELECT * FROM users WHERE lower(username) = lower($1)', [username]);
     if (!rows[0]) return null;
-    const row = rows[0];
-    const user = { ...publicUser(row), rank: row.games > 0 ? Number(row.rank) : null, ranked: Number(row.ranked) };
+    const user = publicUser(rows[0]);
     const history = await this.pool.query(
       `SELECT * FROM matches
         WHERE p1_user_id = $1 OR p2_user_id = $1
@@ -285,6 +265,215 @@ class Database {
     );
     return { user, matches: history.rows.map((m) => matchForUser(m, user.id)) };
   }
+
+  // ---------- Tournaments ----------
+
+  async createTournament(name, organizerId, gamesPerMatch) {
+    const { rows } = await this.pool.query(
+      'INSERT INTO tournaments (name, organizer_id, games_per_match) VALUES ($1, $2, $3) RETURNING id',
+      [name, organizerId, gamesPerMatch],
+    );
+    return Number(rows[0].id);
+  }
+
+  /** Tournaments with entrant counts and progress, running first. */
+  async listTournaments(limit = 50) {
+    const { rows } = await this.pool.query(
+      `${TOURNAMENT_SELECT}
+       ORDER BY CASE t.status WHEN 'running' THEN 0 WHEN 'registration' THEN 1 ELSE 2 END, t.created_at DESC
+       LIMIT $1`,
+      [limit],
+    );
+    return rows.map(tournamentRow);
+  }
+
+  async getTournament(id) {
+    const { rows } = await this.pool.query(`${TOURNAMENT_SELECT} WHERE t.id = $1`, [id]);
+    return rows[0] ? tournamentRow(rows[0]) : null;
+  }
+
+  async openTournamentsBy(userId) {
+    const { rows } = await this.pool.query(
+      "SELECT count(*) AS n FROM tournaments WHERE organizer_id = $1 AND status IN ('registration', 'running')",
+      [userId],
+    );
+    return Number(rows[0].n);
+  }
+
+  async runningTournamentIds() {
+    const { rows } = await this.pool.query("SELECT id FROM tournaments WHERE status = 'running' ORDER BY id");
+    return rows.map((row) => Number(row.id));
+  }
+
+  /** Entrants (without their code), in the order they entered. */
+  async tournamentEntrants(id) {
+    const { rows } = await this.pool.query(
+      `SELECT u.id, u.username, p.joined_at, p.updated_at
+         FROM tournament_players p JOIN users u ON u.id = p.user_id
+        WHERE p.tournament_id = $1
+        ORDER BY p.joined_at`,
+      [id],
+    );
+    return rows.map((row) => ({
+      id: Number(row.id),
+      username: row.username,
+      joinedAt: row.joined_at.getTime(),
+      updatedAt: row.updated_at.getTime(),
+    }));
+  }
+
+  /** Map of user id → bot code, for starting games. */
+  async tournamentCodes(id) {
+    const { rows } = await this.pool.query('SELECT user_id, code FROM tournament_players WHERE tournament_id = $1', [id]);
+    return new Map(rows.map((row) => [Number(row.user_id), row.code]));
+  }
+
+  /**
+   * Enters `userId` with `code`, or replaces their code if already entered.
+   * Only while the tournament is open for registration and not full.
+   * Returns 'joined', 'updated', or null when that isn't allowed.
+   */
+  async saveTournamentEntry(id, userId, code, maxPlayers) {
+    const { rows } = await this.pool.query(
+      `INSERT INTO tournament_players (tournament_id, user_id, code)
+       SELECT $1, $2, $3
+        WHERE EXISTS (SELECT 1 FROM tournaments WHERE id = $1 AND status = 'registration')
+          AND ((SELECT count(*) FROM tournament_players WHERE tournament_id = $1) < $4
+               OR EXISTS (SELECT 1 FROM tournament_players WHERE tournament_id = $1 AND user_id = $2))
+       ON CONFLICT (tournament_id, user_id) DO UPDATE SET code = EXCLUDED.code, updated_at = now()
+       RETURNING (xmax = 0) AS inserted`,
+      [id, userId, code, maxPlayers],
+    );
+    if (!rows[0]) return null;
+    return rows[0].inserted ? 'joined' : 'updated';
+  }
+
+  async removeTournamentEntry(id, userId) {
+    const { rowCount } = await this.pool.query(
+      `DELETE FROM tournament_players
+        WHERE tournament_id = $1 AND user_id = $2
+          AND EXISTS (SELECT 1 FROM tournaments WHERE id = $1 AND status = 'registration')`,
+      [id, userId],
+    );
+    return rowCount > 0;
+  }
+
+  /** Saves the schedule and opens play. `pairings`: [{ round, playerA, playerB }]. False if it already started. */
+  async startTournament(id, pairings) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query('SELECT status FROM tournaments WHERE id = $1 FOR UPDATE', [id]);
+      if (!rows[0] || rows[0].status !== 'registration') {
+        await client.query('ROLLBACK');
+        return false;
+      }
+      for (const p of pairings) {
+        await client.query('INSERT INTO tournament_matches (tournament_id, round, player_a, player_b) VALUES ($1, $2, $3, $4)', [
+          id,
+          p.round,
+          p.playerA,
+          p.playerB,
+        ]);
+      }
+      await client.query("UPDATE tournaments SET status = 'running', started_at = now() WHERE id = $1", [id]);
+      await client.query('COMMIT');
+      return true;
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /** Moves a tournament to 'finished' or 'cancelled'. False if it was already over. */
+  async endTournament(id, status, championId = null) {
+    const { rowCount } = await this.pool.query(
+      `UPDATE tournaments SET status = $2, champion_id = $3, finished_at = now()
+        WHERE id = $1 AND status IN ('registration', 'running')`,
+      [id, status, championId],
+    );
+    return rowCount > 0;
+  }
+
+  async tournamentMatches(id) {
+    const { rows } = await this.pool.query(
+      `SELECT m.*, ua.username AS a_name, ub.username AS b_name
+         FROM tournament_matches m
+         JOIN users ua ON ua.id = m.player_a
+         JOIN users ub ON ub.id = m.player_b
+        WHERE m.tournament_id = $1
+        ORDER BY m.round, m.id`,
+      [id],
+    );
+    return rows.map((row) => ({
+      id: Number(row.id),
+      round: row.round,
+      playerA: Number(row.player_a),
+      playerB: Number(row.player_b),
+      aName: row.a_name,
+      bName: row.b_name,
+      aWins: row.a_wins,
+      bWins: row.b_wins,
+      draws: row.draws,
+      gamesPlayed: row.games_played,
+      finishedAt: row.finished_at ? row.finished_at.getTime() : null,
+    }));
+  }
+
+  /** Every saved game of a tournament. */
+  async tournamentGames(id) {
+    const { rows } = await this.pool.query(
+      `SELECT g.id, g.tournament_match_id, g.game_number, g.winner, g.p1_user_id, g.p2_user_id, g.reason, g.plies
+         FROM matches g JOIN tournament_matches m ON m.id = g.tournament_match_id
+        WHERE m.tournament_id = $1
+        ORDER BY g.tournament_match_id, g.game_number`,
+      [id],
+    );
+    return rows.map((row) => ({
+      id: Number(row.id),
+      matchId: Number(row.tournament_match_id),
+      number: row.game_number,
+      winnerId: row.winner === 1 ? Number(row.p1_user_id) : row.winner === 2 ? Number(row.p2_user_id) : null,
+      redId: Number(row.p1_user_id),
+      reason: row.reason,
+      plies: row.plies,
+    }));
+  }
+
+  async usersById(ids) {
+    const { rows } = await this.pool.query('SELECT * FROM users WHERE id = ANY($1::bigint[])', [ids]);
+    return new Map(rows.map((row) => [Number(row.id), publicUser(row)]));
+  }
+}
+
+const TOURNAMENT_SELECT = `
+  SELECT t.*, o.username AS organizer_name, c.username AS champion_name,
+         (SELECT count(*) FROM tournament_players p WHERE p.tournament_id = t.id) AS entrants,
+         (SELECT count(*) FROM tournament_matches m WHERE m.tournament_id = t.id) AS total_matches,
+         (SELECT count(*) FROM tournament_matches m WHERE m.tournament_id = t.id AND m.games_played >= t.games_per_match) AS finished_matches,
+         (SELECT max(round) FROM tournament_matches m WHERE m.tournament_id = t.id) AS total_rounds
+    FROM tournaments t
+    LEFT JOIN users o ON o.id = t.organizer_id
+    LEFT JOIN users c ON c.id = t.champion_id`;
+
+function tournamentRow(row) {
+  return {
+    id: Number(row.id),
+    name: row.name,
+    status: row.status,
+    gamesPerMatch: row.games_per_match,
+    organizer: row.organizer_id ? { id: Number(row.organizer_id), username: row.organizer_name } : null,
+    champion: row.champion_id ? { id: Number(row.champion_id), username: row.champion_name } : null,
+    entrants: Number(row.entrants),
+    totalMatches: Number(row.total_matches),
+    finishedMatches: Number(row.finished_matches),
+    totalRounds: row.total_rounds === null ? 0 : Number(row.total_rounds),
+    createdAt: row.created_at.getTime(),
+    startedAt: row.started_at ? row.started_at.getTime() : null,
+    finishedAt: row.finished_at ? row.finished_at.getTime() : null,
+  };
 }
 
 module.exports = { Database, describeUrl };
