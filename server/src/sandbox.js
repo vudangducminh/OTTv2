@@ -16,7 +16,6 @@ class BotError extends Error {}
 /** One submitted bot, running in its own locked-down Node process. */
 class BotProcess {
   constructor(options = {}) {
-    this.moveTimeLimit = options.moveTimeLimit || config.moveTimeLimitMs;
     this.loadTimeLimit = options.loadTimeLimit || config.loadTimeLimitMs;
     this.memoryMb = options.memoryMb || config.botMemoryMb;
     this.child = null;
@@ -74,7 +73,7 @@ class BotProcess {
       const timer = setTimeout(() => {
         this.pending = null;
         this.stop();
-        reject(new BotError(`stopped responding (limit ${timeLimit} ms)`));
+        reject(Object.assign(new BotError('ran out of time (it stopped responding)'), { timedOut: true }));
       }, timeLimit + GRACE_MS);
       this.pending = { id, resolve, reject, timer };
       this.child.send({ id, ...message, timeLimit });
@@ -90,13 +89,16 @@ class BotProcess {
   }
 
   /**
-   * Asks for a move. Resolves with { move, ms, logs } where move is { from, to }
-   * (not yet checked against the rules); rejects with a BotError.
+   * Asks for a move, allowing up to `timeLimit` ms (the bot's remaining clock).
+   * Resolves with { move, ms, logs }: move is { from, to } (not yet checked
+   * against the rules) and ms is the time move() took. Rejects with a BotError,
+   * which has `timedOut: true` when the time ran out.
    */
-  async move(game, me) {
-    const reply = await this._request({ type: 'turn', state: game.toJSON(), me }, this.moveTimeLimit);
+  async move(game, me, timeLimit) {
+    const limit = Math.max(1, Math.ceil(timeLimit));
+    const reply = await this._request({ type: 'turn', state: game.toJSON(), me }, limit);
     const logs = Array.isArray(reply.logs) ? reply.logs.map(String) : [];
-    if (!reply.ok) throw Object.assign(new BotError(String(reply.error)), { logs, ms: reply.ms });
+    if (!reply.ok) throw Object.assign(new BotError(String(reply.error)), { logs, ms: reply.ms, timedOut: Boolean(reply.timedOut) });
     const move = OTT.normalizeMove(reply.move);
     if (!move) throw Object.assign(new BotError('move() returned something that is not a move'), { logs });
     return { move, ms: Number(reply.ms) || 0, logs };
@@ -107,12 +109,20 @@ class BotProcess {
   }
 }
 
+/** 300000 → "5:00". */
+function formatClock(ms) {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
 /**
  * Loads a bot and plays one turn on a fresh board, so obvious mistakes show up
- * at submission time instead of as a forfeit in the middle of a match.
- * Resolves with { ok: true, move, ms, logs } or { ok: false, error, logs }.
+ * at submission time instead of as a forfeit in the middle of a match. The test
+ * move gets the bot's whole game clock, as its first move in a game would.
+ * `signal` (an AbortSignal) stops the check early.
+ * Resolves with { ok: true, move, ms, logs } or { ok: false, error, logs, cancelled? }.
  */
-async function checkBot(code, seat = 1) {
+async function checkBot(code, seat = 1, { signal = null } = {}) {
   if (typeof code !== 'string' || !code.trim()) return { ok: false, error: 'The code is empty.', logs: [] };
   if (Buffer.byteLength(code) > config.maxCodeBytes) {
     return { ok: false, error: `The code is larger than ${Math.round(config.maxCodeBytes / 1024)} KB.`, logs: [] };
@@ -120,11 +130,20 @@ async function checkBot(code, seat = 1) {
 
   const bot = new BotProcess();
   const logs = [];
+  const stop = () => bot.stop();
+  if (signal) signal.addEventListener('abort', stop, { once: true });
   try {
     logs.push(...(await bot.load(code)).logs);
     const game = OTT.Game.create();
     if (seat === 2) game.play(OTT.random(game.legalMoves()));
-    const reply = await bot.move(game, seat);
+    let reply;
+    try {
+      reply = await bot.move(game, seat, config.gameTimeLimitMs);
+    } catch (error) {
+      if (!(error instanceof BotError) || !error.timedOut) throw error;
+      const clock = formatClock(config.gameTimeLimitMs);
+      throw Object.assign(new BotError(`On a test board your bot used up its whole ${clock} game clock without making its first move`), { logs: error.logs });
+    }
     logs.push(...reply.logs);
     const problem = game.validate(reply.move);
     if (problem) {
@@ -133,9 +152,11 @@ async function checkBot(code, seat = 1) {
     return { ok: true, move: reply.move, ms: reply.ms, logs };
   } catch (error) {
     if (!(error instanceof BotError)) throw error;
+    if (signal && signal.aborted) return { ok: false, cancelled: true, error: 'The check was stopped.', logs };
     logs.push(...(error.logs || []));
     return { ok: false, error: error.message, logs };
   } finally {
+    if (signal) signal.removeEventListener('abort', stop);
     bot.stop();
   }
 }

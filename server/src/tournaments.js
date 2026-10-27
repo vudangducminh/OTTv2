@@ -118,10 +118,11 @@ function gameKey(matchId, gameNumber) {
 
 /** Emits 'changed' (tournamentId) whenever a tournament's entrants, schedule or results change. */
 class Tournaments extends EventEmitter {
-  constructor({ db, arena }) {
+  constructor({ db, arena, checks = null }) {
     super();
     this.db = db;
     this.arena = arena;
+    this.checks = checks;
     this.live = new Map(); // gameKey(match id, game number) → id of that game in the arena
     this.queues = new Map(); // tournament id → promise chain, so advancing never overlaps
   }
@@ -153,13 +154,16 @@ class Tournaments extends EventEmitter {
   }
 
   /** Enters the tournament with a bot, or replaces the bot before it starts. */
-  async enter(user, id, code) {
+  async enter(user, id, code, checkId = null) {
     requireUser(user);
     const tournament = await this._get(id);
     if (tournament.status !== 'registration') throw new ApiError(409, 'This tournament has already started.');
-    const check = await checkBot(code, 1);
-    if (!check.ok) {
-      throw new ApiError(422, `Your bot did not pass the check: ${check.error}`, { botError: check.error, logs: check.logs });
+    // Skipped when the browser already ran a check on exactly this code (see checks.js).
+    if (!(this.checks && this.checks.passed(user, checkId, code))) {
+      const check = await checkBot(code, 1);
+      if (!check.ok) {
+        throw new ApiError(422, `Your bot did not pass the check: ${check.error}`, { botError: check.error, logs: check.logs });
+      }
     }
     const result = await this.db.saveTournamentEntry(tournament.id, user.id, code, MAX_PLAYERS);
     if (!result) throw new ApiError(409, `Entries are closed (the tournament started or has ${MAX_PLAYERS} players).`);

@@ -13,6 +13,7 @@ const { Arena } = require('../server/src/arena');
 const { Database } = require('../server/src/db');
 const { createServer } = require('../server/src/http');
 const { Tournaments } = require('../server/src/tournaments');
+const { Checks } = require('../server/src/checks');
 
 const examples = path.join(__dirname, '..', 'library', 'examples');
 const greedy = fs.readFileSync(path.join(examples, 'greedy.js'), 'utf8');
@@ -47,10 +48,11 @@ test.before(async () => {
     return;
   }
   await db.reset();
-  const arena = new Arena(config, { db });
+  const checks = new Checks({ timeLimitMs: config.gameTimeLimitMs });
+  const arena = new Arena(config, { db, checks });
   await arena.init();
-  const tournaments = new Tournaments({ db, arena });
-  server = createServer({ arena, accounts: new Accounts(db, config), db, tournaments, config });
+  const tournaments = new Tournaments({ db, arena, checks });
+  server = createServer({ arena, accounts: new Accounts(db, config), db, tournaments, checks, config });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -105,6 +107,18 @@ class Client {
   }
 }
 
+/** Starts a background bot check and follows it until it finishes. */
+async function runCheck(client, code, seat = 1) {
+  const started = await client.api('POST', '/api/check', { code, seat });
+  assert.equal(started.status, 202);
+  let check = started.body.check;
+  while (check.status === 'running') {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    check = (await client.api('GET', `/api/check/${check.id}`)).body.check;
+  }
+  return check;
+}
+
 async function waitForEnd(client, id) {
   for (let i = 0; i < 200; i++) {
     const { body } = await client.api('GET', `/api/matches/${id}`);
@@ -144,7 +158,21 @@ function stream(query, until) {
 dbTest('serves the client, the library and a health check', async () => {
   const page = await fetch(base + '/');
   assert.equal(page.status, 200);
-  assert.match(await page.text(), /OTTv2/);
+  assert.equal(page.headers.get('cache-control'), 'no-cache');
+  const html = await page.text();
+  assert.match(html, /OTTv2/);
+
+  // Scripts and styles are linked under a fingerprint, so browsers may keep them.
+  const script = /src="(\/v\/[0-9a-f]+\/js\/app\.js)"/.exec(html);
+  assert.ok(script, 'app.js is linked with a fingerprint');
+  assert.match(html, /href="\/v\/[0-9a-f]+\/styles\.css"/);
+  assert.match(html, /src="\/v\/[0-9a-f]+\/library\/ottv2\.js"/);
+  const versioned = await fetch(base + script[1]);
+  assert.equal(versioned.status, 200);
+  assert.match(versioned.headers.get('cache-control'), /immutable/);
+  const imported = await fetch(base + script[1].replace('app.js', 'ui.js'));
+  assert.equal(imported.status, 200, 'relative imports resolve under the same fingerprint');
+  assert.equal((await fetch(base + '/js/app.js')).headers.get('cache-control'), 'no-cache');
   assert.equal((await fetch(base + '/library/ottv2.js')).status, 200);
   assert.equal((await fetch(base + '/library/..%2Fpackage.json')).status, 404);
   const health = await new Client().api('GET', '/api/health');
@@ -247,7 +275,44 @@ dbTest('rejects broken bots with a readable error', async () => {
   assert.equal(status, 422);
   assert.match(body.error, /TypeError/);
   assert.match(body.error, /line 1/);
-  assert.equal((await dee.api('POST', '/api/check', { code: greedy, seat: 2 })).body.ok, true);
+  assert.equal((await runCheck(dee, greedy, 2)).ok, true);
+});
+
+dbTest('bot checks run in the background on the game clock, and a passed check lets the bot in', async () => {
+  const ivy = await Client.registered('ivy');
+  const jon = await Client.registered('jon');
+
+  // A first move far longer than a second passes: it only has to fit the game clock.
+  const thinker = `function move(game) {
+  const until = Date.now() + 2000;
+  while (Date.now() < until) {}
+  return game.legalMoves()[0];
+}`;
+  const started = Date.now();
+  const check = await runCheck(ivy, thinker);
+  assert.equal(check.ok, true);
+  assert.ok(check.ms >= 1900, `the test move took ${check.ms} ms`);
+  assert.equal(check.limitMs, config.gameTimeLimitMs);
+
+  // Submitting with the passed check doesn't test the bot again (that would take another 2 s).
+  const t0 = Date.now();
+  const created = await ivy.api('POST', '/api/matches', { name: 'Checked', code: thinker, checkId: check.id });
+  assert.equal(created.status, 201);
+  assert.ok(Date.now() - t0 < 1500, 'the passed check was reused');
+  assert.ok(Date.now() - started > 1900);
+  await ivy.api('POST', `/api/matches/${created.body.match.id}/cancel`, {});
+
+  // A check only vouches for its own player and its exact code.
+  assert.equal((await jon.api('GET', `/api/check/${check.id}`)).status, 404);
+  const other = await ivy.api('POST', '/api/matches', { name: 'Swapped', code: 'function move(g) { return g.nope.x }', checkId: check.id });
+  assert.equal(other.status, 422, 'different code is tested again');
+
+  // Stop ends a check that would otherwise run for the whole clock.
+  const loop = (await ivy.api('POST', '/api/check', { code: 'function move(g) { while (true) {} }' })).body.check;
+  const stopped = (await ivy.api('POST', `/api/check/${loop.id}/stop`, {})).body.check;
+  assert.equal(stopped.status, 'done');
+  assert.equal(stopped.cancelled, true);
+  assert.equal((await ivy.api('GET', `/api/check/${loop.id}`)).body.check.cancelled, true);
 });
 
 dbTest('two players: usernames on the seats, live stream, rated result, ranking and profiles', async () => {
@@ -269,7 +334,12 @@ dbTest('two players: usernames on the seats, live stream, rated result, ranking 
   assert.equal((await p2.api('POST', `/api/matches/${id}/join`, { code: random })).status, 409);
 
   const events = await spectator;
-  assert.equal(events[0].event, 'snapshot');
+  // Every stream starts with the client-code version, then the match.
+  assert.equal(events[0].event, 'version');
+  assert.match(events[0].data.version, /^[0-9a-f]{12}$/);
+  const html = await (await fetch(base + '/')).text();
+  assert.ok(html.includes(`/v/${events[0].data.version}/js/app.js`), 'the stream reports the same version the page loads');
+  assert.equal(events[1].event, 'snapshot');
   const moves = events.filter((e) => e.event === 'move');
   assert.deepEqual(
     moves.map((e) => e.data.record.ply),

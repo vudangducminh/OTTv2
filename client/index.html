@@ -150,7 +150,7 @@
                 <li>Moving onto an enemy token starts a battle. The winner stays on the cell and the loser is removed. <b>Ties are not allowed</b>, so you can't move onto a token of the same type.</li>
                 <li>You win by getting a token to the far corner (<b>i9</b> for Red, <b>a1</b> for Blue) or by removing every enemy token.</li>
               </ul>
-              <p class="fine">Server rules: Red moves first. A bot that crashes, takes too long or plays an illegal move forfeits. A player with no legal moves loses. After 600 moves, the player with more tokens wins.</p>
+              <p class="fine">Server rules: Red moves first. A bot that crashes, uses up its 5-minute game clock or plays an illegal move forfeits. A player with no legal moves loses. After 600 moves, the player with more tokens wins.</p>
             </div>
             <div class="rps" aria-label="Rock beats scissors, scissors beats paper, paper beats rock">
               <svg viewBox="0 0 200 180" class="rps-ring" aria-hidden="true">
@@ -307,8 +307,8 @@ function move(game) {
             <h2 id="d-match">How a match runs</h2>
             <ul>
               <li>The first player to submit is <b class="tc p1">P1 · Red</b>. Red starts on rows a–c, moves first, and races for <b>i9</b>. The second player is <b class="tc p2">P2 · Blue</b>, starts on rows g–i, and races for <b>a1</b>.</li>
-              <li>When you submit, the server checks your bot on a test board. If it doesn't load or can't make a legal first move, you get the error right away, with a line number.</li>
-              <li>During the match each bot runs in its own sandboxed process. It has <b><span data-config="moveTimeLimitMs">1000</span> ms per move</b> and <b><span data-config="botMemoryMb">64</span> MB of memory</b>, with no network or file access. Top-level variables persist between turns, so you can keep state across moves.</li>
+              <li>When you submit, the server runs your bot's first move on a test board, with the same clock it gets in a game, and shows the clock while it thinks. If it doesn't load, can't make a legal first move or runs out of time, you get the error, with a line number.</li>
+              <li>During the match each bot runs in its own sandboxed process. It has <b><span data-config="gameTimeLimitMs">5 minutes</span> of thinking time for the whole game</b>, like a chess clock: a single move may take as long as it needs, but when the total runs out the bot forfeits. It also has <b><span data-config="botMemoryMb">64</span> MB of memory</b>, with no network or file access. Top-level variables persist between turns, so you can keep state across moves.</li>
               <li>If a bot throws an error, runs out of time or memory, or returns an illegal move, it <b>forfeits</b>. The reason is written to the log.</li>
               <li>You need an account to submit a bot. Your profile keeps a record of your games against other players. Games against house bots or yourself are practice. Points and standings exist only inside <a href="#/tournaments">tournaments</a>.</li>
               <li>In a <a href="#/tournaments">tournament</a> your bot plays every other entrant in a match of 4 games, alternating Red, Blue, Red, Blue. Winning more of the 4 games wins the match (3 points). Equal is a draw (1 point), and fewer is a loss (0). Your bot can tell which colour it has from <code>game.me</code>.</li>

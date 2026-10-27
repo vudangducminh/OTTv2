@@ -35,6 +35,8 @@ services:
       # Set in .env when publishing through the Cloudflare tunnel (see below).
       PUBLIC_URL: ${PUBLIC_URL:-}
       TRUST_PROXY: ${TRUST_PROXY:-}
+      # Each bot's thinking time per game (default 5 minutes).
+      GAME_TIME_LIMIT_MS: ${GAME_TIME_LIMIT_MS:-}
     ports:
       # APP_PORT=8080 docker compose up   → serve on another host port
       - "${APP_PORT:-6767}:6767"

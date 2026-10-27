@@ -38,7 +38,9 @@ module.exports = Object.freeze({
   moveDelayMs: number('MOVE_DELAY_MS', 600),
   // Tournaments play many games, so their games move a little faster by default.
   tournamentMoveDelayMs: number('TOURNAMENT_MOVE_DELAY_MS', 300),
-  moveTimeLimitMs: number('MOVE_TIME_LIMIT_MS', 1000),
+  // Each bot's thinking time for a whole game, like a chess clock: a single move
+  // may take as long as it likes, but the bot forfeits when its total runs out.
+  gameTimeLimitMs: number('GAME_TIME_LIMIT_MS', 5 * 60 * 1000),
   loadTimeLimitMs: number('LOAD_TIME_LIMIT_MS', 2000),
   botMemoryMb: number('BOT_MEMORY_MB', 64),
   maxCodeBytes: number('MAX_CODE_BYTES', 100 * 1024),

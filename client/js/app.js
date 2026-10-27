@@ -1,4 +1,4 @@
-import { $, el, fill, icon, toast, timeAgo, clock, api, copyText } from './ui.js';
+import { $, el, fill, icon, toast, timeAgo, clock, api, copyText, formatClock } from './ui.js';
 import { AuthDialog } from './auth.js';
 import { Board } from './board.js';
 import { renderProfile } from './profile.js';
@@ -11,6 +11,9 @@ const REPLAY_STEP_MS = 520;
 const VIEWS = ['home', 'match', 'user', 'tournaments', 'tournament', 'docs'];
 // Views whose content is fetched from the API when shown.
 const PAGE_VIEWS = new Set(['user', 'tournaments', 'tournament']);
+
+// The fingerprint this page's code was loaded under: /v/<version>/js/app.js.
+const LOADED_VERSION = (/\/v\/([0-9a-f]+)\//.exec(import.meta.url) || [])[1] || null;
 
 const app = {
   matches: [],
@@ -234,10 +237,44 @@ const stream = {
     on('move', (payload) => onMove(payload));
     on('log', (entry) => onLog(entry));
     on('tournament', (payload) => onTournamentChanged(payload));
+    on('version', ({ version }) => onVersion(version));
     source.addEventListener('open', () => setConnection(true));
     source.addEventListener('error', () => setConnection(false));
   },
 };
+
+/**
+ * The server was updated while this tab was open: load the new code. If a
+ * dialog is open (someone may be typing), offer a reload instead.
+ */
+function onVersion(version) {
+  if (!LOADED_VERSION || !version || version === LOADED_VERSION) return;
+  let tried = null;
+  try {
+    tried = sessionStorage.getItem('ottv2.reloadedFor');
+  } catch {
+    /* storage unavailable */
+  }
+  const busy = document.querySelector('dialog[open]');
+  if (!busy && tried !== version) {
+    try {
+      sessionStorage.setItem('ottv2.reloadedFor', version);
+    } catch {
+      /* storage unavailable */
+    }
+    location.reload();
+    return;
+  }
+  if (document.getElementById('update-bar')) return;
+  document.body.append(
+    el(
+      'div',
+      { class: 'update-bar', id: 'update-bar', role: 'status' },
+      el('span', {}, 'OTTv2 was updated.'),
+      el('button', { class: 'btn sm primary', type: 'button', onclick: () => location.reload() }, 'Reload'),
+    ),
+  );
+}
 
 function setConnection(online) {
   const node = $('#conn');
@@ -381,6 +418,7 @@ function openMatch(id) {
     summary: null,
     initial: null,
     moves: [],
+    moveTimes: [],
     log: [],
     frames: [],
     replay: null,
@@ -409,10 +447,11 @@ function closeMatch() {
 function loadSnapshot(snapshot) {
   const m = app.match;
   if (!m || m.id !== snapshot.id) return;
-  const { initial, moves, log, ...summary } = snapshot;
+  const { initial, moves, moveTimes, log, ...summary } = snapshot;
   m.summary = summary;
   m.initial = initial;
   m.moves = moves.slice();
+  m.moveTimes = (moveTimes || []).slice();
   m.log = log.slice();
   m.loaded = true;
   m.missing = false;
@@ -461,7 +500,7 @@ function onUpdate(summary) {
   }
 }
 
-function onMove({ record, summary }) {
+function onMove({ record, ms, summary }) {
   const m = app.match;
   if (!m || m.id !== summary.id || !m.loaded) return;
   if (!m.replay || record.ply !== m.moves.length + 1) {
@@ -470,6 +509,7 @@ function onMove({ record, summary }) {
   }
   m.summary = summary;
   m.moves.push(record);
+  m.moveTimes.push(ms);
   try {
     m.replay.play(record);
   } catch {
@@ -479,7 +519,7 @@ function onMove({ record, summary }) {
   m.frames.push(m.replay.tokens());
   const list = $('#m-moves');
   if (m.moves.length === 1) list.replaceChildren();
-  list.append(moveRow(record));
+  list.append(moveRow(record, ms));
 
   if (m.follow) {
     m.ply = m.moves.length;
@@ -595,6 +635,13 @@ function renderPlayers() {
       card,
       el('div', { class: 'pc-name' }, el('i', { class: `dot p${seat}` }), el('b', {}, name), ...tags),
       el('div', { class: 'pc-seat' }, `P${seat} · ${COLOR[seat]} · goal ${OTT.TARGETS[seat]}`),
+      summary.clocks
+        ? el(
+            'div',
+            { class: `pc-clock${summary.clocks[seat] < 30000 ? ' low' : ''}`, title: 'Thinking time left for this game' },
+            `⏱ ${formatClock(summary.clocks[seat])} left`,
+          )
+        : null,
       el(
         'div',
         { class: 'pc-counts' },
@@ -750,7 +797,13 @@ function renderReplayBar() {
   liveButton.title = m.follow ? 'Following the live game' : 'Jump to the live position';
 }
 
-function moveRow(record) {
+/** 300000 → "5 minutes", 90000 → "90 seconds". */
+function describeDuration(ms) {
+  if (ms % 60000 === 0) return `${ms / 60000} ${ms === 60000 ? 'minute' : 'minutes'}`;
+  return `${Math.round(ms / 1000)} seconds`;
+}
+
+function moveRow(record, ms) {
   let outcome = null;
   if (record.outcome === 'win') outcome = el('span', { class: 'mv-out win' }, 'beats', icon(record.defender.type), record.defender.type);
   if (record.outcome === 'lose') outcome = el('span', { class: 'mv-out lose' }, 'lost to', icon(record.defender.type), record.defender.type);
@@ -759,7 +812,14 @@ function moveRow(record) {
     { class: `mv p${record.player}`, dataset: { ply: record.ply }, title: `Show the board after move ${record.ply}` },
     el('span', { class: 'mv-ply' }, record.ply),
     el('span', { class: 'mv-tok', title: record.type }, icon(record.type)),
-    el('span', { class: 'mv-text' }, el('span', { class: 'mv-path' }, `${record.from} → ${record.to}`), outcome),
+    el(
+      'span',
+      { class: 'mv-text' },
+      el('span', { class: 'mv-path' }, `${record.from} → ${record.to}`),
+      outcome,
+      // Only worth showing for moves that took a noticeable time.
+      ms >= 100 ? el('span', { class: 'mv-ms', title: 'Thinking time for this move' }, `${(ms / 1000).toFixed(3)}s`) : null,
+    ),
   );
 }
 
@@ -771,7 +831,7 @@ function renderMoves() {
       m.summary.status === 'waiting' || m.summary.status === 'queued' ? 'Moves appear here once the match starts.' : 'No moves were played.';
     list.replaceChildren(el('li', { class: 'empty-note' }, note));
   } else {
-    list.replaceChildren(...m.moves.map(moveRow));
+    list.replaceChildren(...m.moves.map((record, i) => moveRow(record, m.moveTimes[i])));
   }
   if (m.summary.result && m.summary.status === 'finished') list.append(el('li', { class: 'mv-end' }, m.summary.result.message));
 }
@@ -943,7 +1003,10 @@ function renderDocs() {
     ),
   );
   if (app.config) {
-    for (const node of document.querySelectorAll('[data-config]')) node.textContent = app.config[node.dataset.config];
+    for (const node of document.querySelectorAll('[data-config]')) {
+      const value = app.config[node.dataset.config];
+      node.textContent = node.dataset.config === 'gameTimeLimitMs' ? describeDuration(value) : value;
+    }
   }
 }
 

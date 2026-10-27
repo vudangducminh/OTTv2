@@ -1,6 +1,7 @@
 const config = require('./src/config');
 const { Accounts } = require('./src/accounts');
 const { Arena } = require('./src/arena');
+const { Checks } = require('./src/checks');
 const { Database } = require('./src/db');
 const { createServer } = require('./src/http');
 const { Tournaments } = require('./src/tournaments');
@@ -17,10 +18,11 @@ async function main() {
   }
 
   const accounts = new Accounts(db, config);
-  const arena = new Arena(config, { db });
+  const checks = new Checks({ timeLimitMs: config.gameTimeLimitMs });
+  const arena = new Arena(config, { db, checks });
   await arena.init();
-  const tournaments = new Tournaments({ db, arena });
-  const server = createServer({ arena, accounts, db, tournaments, config });
+  const tournaments = new Tournaments({ db, arena, checks });
+  const server = createServer({ arena, accounts, db, tournaments, checks, config });
 
   // One console line per match milestone; the move-by-move log goes to server/logs/.
   arena.on('match-log', (match, entry) => {

@@ -46,10 +46,11 @@ function requireUser(user) {
  * With a database, finished matches are saved and rated.
  */
 class Arena extends EventEmitter {
-  constructor(config, { db = null } = {}) {
+  constructor(config, { db = null, checks = null } = {}) {
     super();
     this.config = config;
     this.db = db;
+    this.checks = checks;
     this.matches = new Map();
     this.nextId = 1;
     this.examples = loadExamples(config.libraryDir);
@@ -78,13 +79,8 @@ class Arena extends EventEmitter {
     return this.examples.find((e) => e.id === id) || null;
   }
 
-  async check(user, code, seat) {
-    requireUser(user);
-    return checkBot(code, seat === 2 ? 2 : 1);
-  }
-
   /** Opens a new match with `user` in seat 1, optionally against a house bot. */
-  async create(user, { name, code, opponent }) {
+  async create(user, { name, code, opponent, checkId }) {
     requireUser(user);
     const matchName = cleanText(name || `${user.username}'s match`, 'a match name', 40);
     const house = opponent ? this.example(String(opponent)) : null;
@@ -98,7 +94,7 @@ class Arena extends EventEmitter {
       throw new ApiError(429, `You already have ${MAX_OPEN_PER_USER} matches open. Wait for one to finish first.`);
     }
 
-    await this._requireWorkingBot(code, 1);
+    await this._requireWorkingBot(user, checkId, code, 1);
 
     const match = this._register(new Match({ id: this.nextId++, name: matchName, config: this.config, onFinish: (m) => this._save(m) }));
     match.sit(1, { name: user.username, code, userId: user.id });
@@ -108,13 +104,13 @@ class Arena extends EventEmitter {
   }
 
   /** Takes the open seat in a waiting match. */
-  async join(id, user, { code }) {
+  async join(id, user, { code, checkId }) {
     requireUser(user);
     const match = this.get(id);
     const seat = match.openSeat;
     if (!seat) throw new ApiError(409, 'This match already has two players.');
 
-    await this._requireWorkingBot(code, seat);
+    await this._requireWorkingBot(user, checkId, code, seat);
 
     // Someone may have taken the seat while the bot was being checked.
     if (match.openSeat !== seat) throw new ApiError(409, 'Someone else just took this seat.');
@@ -164,7 +160,9 @@ class Arena extends EventEmitter {
     return match;
   }
 
-  async _requireWorkingBot(code, seat) {
+  /** Skipped when the browser already ran a check on exactly this code (see checks.js). */
+  async _requireWorkingBot(user, checkId, code, seat) {
+    if (this.checks && this.checks.passed(user, checkId, code)) return;
     const check = await checkBot(code, seat);
     if (!check.ok) {
       throw new ApiError(422, `Your bot did not pass the check: ${check.error}`, { botError: check.error, logs: check.logs });

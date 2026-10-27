@@ -43,6 +43,15 @@ export function icon(name, className = '') {
   return svg;
 }
 
+/** A game clock to the millisecond: 299978 → "4:59.978", 1523 → "0:01.523". */
+export function formatClock(ms) {
+  const total = Math.max(0, Math.round(ms));
+  const minutes = Math.floor(total / 60000);
+  const seconds = Math.floor((total % 60000) / 1000);
+  const millis = total % 1000;
+  return `${minutes}:${String(seconds).padStart(2, '0')}.${String(millis).padStart(3, '0')}`;
+}
+
 export function toast(message, kind = '') {
   const node = el('div', { class: `toast ${kind}` }, message);
   document.getElementById('toasts').append(node);

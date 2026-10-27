@@ -1,3 +1,4 @@
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
@@ -58,8 +59,54 @@ function readJson(request, limit) {
   });
 }
 
-/** Serves files under `root`, refusing anything that resolves outside it. */
-function serveStatic(root, pathname, request, response) {
+/**
+ * Fingerprint of the client files and the library, from their sizes and
+ * modification times. It changes whenever any of them changes.
+ */
+function assetVersion(config) {
+  const parts = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else {
+        const stat = fs.statSync(full);
+        parts.push(`${full}:${stat.size}:${stat.mtimeMs}`);
+      }
+    }
+  };
+  walk(config.clientDir);
+  walk(config.libraryDir);
+  return crypto.createHash('sha1').update(parts.sort().join('\n')).digest('hex').slice(0, 12);
+}
+
+const ASSET_LINK = /(href|src)="(?:\/library\/ottv2\.js|styles\.css|favicon\.svg|js\/app\.js)"/g;
+
+/**
+ * The page, with its scripts and styles under /v/<fingerprint>/. Cloudflare
+ * tells browsers to keep JS and CSS for hours; a new fingerprint after every
+ * change means a normal reload always gets the current code. Imports inside
+ * the modules are relative, so they pick up the same prefix.
+ */
+function sendIndex(config, request, response) {
+  const version = assetVersion(config);
+  const html = fs.readFileSync(path.join(config.clientDir, 'index.html'), 'utf8').replace(ASSET_LINK, (match, attr) => {
+    const file = match.slice(attr.length + 2, -1).replace(/^\//, '');
+    return `${attr}="/v/${version}/${file}"`;
+  });
+  response.writeHead(200, {
+    'content-type': CONTENT_TYPES['.html'],
+    'content-length': Buffer.byteLength(html),
+    'cache-control': 'no-cache',
+  });
+  response.end(request.method === 'HEAD' ? undefined : html);
+}
+
+/**
+ * Serves files under `root`, refusing anything that resolves outside it.
+ * `immutable` (fingerprinted URLs) lets browsers and Cloudflare keep the file.
+ */
+function serveStatic(root, pathname, request, response, immutable = false) {
   let decoded;
   try {
     decoded = decodeURIComponent(pathname);
@@ -78,7 +125,7 @@ function serveStatic(root, pathname, request, response) {
   const headers = {
     'content-type': CONTENT_TYPES[path.extname(filePath)] || 'application/octet-stream',
     'content-length': stat.size,
-    'cache-control': 'no-cache',
+    'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
   };
   // Let people save the library and example bots straight from the docs page.
   if (request.url.includes('download=1')) headers['content-disposition'] = `attachment; filename="${path.basename(filePath)}"`;
@@ -93,7 +140,9 @@ function serveStatic(root, pathname, request, response) {
  * always receives the lobby, plus every event of the match it is watching.
  */
 class Hub {
-  constructor(arena, tournaments) {
+  /** `version()` is the current fingerprint of the client code (see assetVersion). */
+  constructor(arena, tournaments, version = () => null) {
+    this.version = version;
     this.arena = arena;
     this.clients = new Set();
     this.lobbyTimer = null;
@@ -107,7 +156,9 @@ class Hub {
     // Watchers need the dealt board, which summaries don't carry.
     arena.on('match-start', (match) => this._toWatchers(match.id, 'snapshot', match.snapshot()));
     arena.on('match-update', (match) => this._toWatchers(match.id, 'update', match.summary()));
-    arena.on('match-move', (match, record) => this._toWatchers(match.id, 'move', { record, summary: match.summary() }));
+    arena.on('match-move', (match, record) =>
+      this._toWatchers(match.id, 'move', { record, ms: match.moveTimes[record.ply - 1], summary: match.summary() }),
+    );
     arena.on('match-log', (match, entry) => this._toWatchers(match.id, 'log', entry));
 
     setInterval(() => {
@@ -123,6 +174,9 @@ class Hub {
       'x-accel-buffering': 'no',
     });
     response.write('retry: 2000\n\n');
+    // Tabs reconnect after every deploy; one loaded with older code sees a
+    // different version here and reloads itself.
+    response.write(`event: version\ndata: ${JSON.stringify({ version: this.version() })}\n\n`);
 
     let match = null;
     if (watchId) match = this.arena.matches.get(Number(watchId)) || null;
@@ -190,8 +244,8 @@ class Hub {
  * The HTTP server: API routes, the live event stream, and the client's files.
  * `accounts`, `db` and `tournaments` are optional; without them there are no logins, profiles or tournaments.
  */
-function createServer({ arena, accounts = null, db = null, tournaments = null, config }) {
-  const hub = new Hub(arena, tournaments);
+function createServer({ arena, accounts = null, db = null, tournaments = null, checks = null, config }) {
+  const hub = new Hub(arena, tournaments, () => assetVersion(config));
   const bodyLimit = config.maxCodeBytes + 16 * 1024;
 
   const currentUser = (req) => (accounts ? accounts.userFromCookie(req.headers.cookie) : null);
@@ -302,7 +356,7 @@ function createServer({ arena, accounts = null, db = null, tournaments = null, c
       async (req, res, [id]) => {
         needTournaments();
         const body = await readJson(req, bodyLimit);
-        sendJson(res, 200, { result: await tournaments.enter(await currentUser(req), id, body.code) });
+        sendJson(res, 200, { result: await tournaments.enter(await currentUser(req), id, body.code, body.checkId) });
       },
     ],
     ...['leave', 'start', 'cancel'].map((action) => [
@@ -359,12 +413,31 @@ function createServer({ arena, accounts = null, db = null, tournaments = null, c
         sendJson(res, 200, { match: arena.cancel(id, await currentUser(req)).summary() });
       },
     ],
+    // A bot check runs in the background: start it, follow it, stop it.
     [
       'POST',
       /^\/api\/check$/,
       async (req, res) => {
+        if (!checks) throw new ApiError(503, 'Bot checks are not available on this server.');
         const body = await readJson(req, bodyLimit);
-        sendJson(res, 200, await arena.check(await currentUser(req), body.code, Number(body.seat)));
+        sendJson(res, 202, { check: checks.start(await currentUser(req), body.code, Number(body.seat)) });
+      },
+    ],
+    [
+      'GET',
+      /^\/api\/check\/([A-Za-z0-9_-]{1,40})$/,
+      async (req, res, [id]) => {
+        if (!checks) throw new ApiError(503, 'Bot checks are not available on this server.');
+        sendJson(res, 200, { check: checks.get(await currentUser(req), id) });
+      },
+    ],
+    [
+      'POST',
+      /^\/api\/check\/([A-Za-z0-9_-]{1,40})\/stop$/,
+      async (req, res, [id]) => {
+        if (!checks) throw new ApiError(503, 'Bot checks are not available on this server.');
+        await readJson(req, 4096);
+        sendJson(res, 200, { check: checks.stop(await currentUser(req), id) });
       },
     ],
     [
@@ -378,7 +451,7 @@ function createServer({ arena, accounts = null, db = null, tournaments = null, c
       (req, res) =>
         sendJson(res, 200, {
           moveDelayMs: config.moveDelayMs,
-          moveTimeLimitMs: config.moveTimeLimitMs,
+          gameTimeLimitMs: config.gameTimeLimitMs,
           loadTimeLimitMs: config.loadTimeLimitMs,
           botMemoryMb: config.botMemoryMb,
           maxCodeBytes: config.maxCodeBytes,
@@ -398,9 +471,16 @@ function createServer({ arena, accounts = null, db = null, tournaments = null, c
       }
       if (url.pathname.startsWith('/api/')) throw new ApiError(404, 'Unknown API endpoint.');
       if (request.method !== 'GET' && request.method !== 'HEAD') throw new ApiError(405, 'Method not allowed.');
-      const served = url.pathname.startsWith('/library/')
-        ? serveStatic(config.libraryDir, url.pathname.slice('/library'.length), request, response)
-        : serveStatic(config.clientDir, url.pathname, request, response);
+      if (url.pathname === '/' || url.pathname === '/index.html') {
+        sendIndex(config, request, response);
+        return;
+      }
+      // /v/<fingerprint>/… is the same file as /…, but cacheable forever.
+      const versioned = /^\/v\/[0-9a-f]{6,40}(\/.*)$/.exec(url.pathname);
+      const pathname = versioned ? versioned[1] : url.pathname;
+      const served = pathname.startsWith('/library/')
+        ? serveStatic(config.libraryDir, pathname.slice('/library'.length), request, response, Boolean(versioned))
+        : serveStatic(config.clientDir, pathname, request, response, Boolean(versioned));
       if (!served) {
         response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
         response.end('Not found');

@@ -130,12 +130,8 @@ function turn({ state, me, timeLimit }) {
   } catch (error) {
     const ms = Math.round(performance.now() - started);
     const message = describeError(error);
-    return {
-      ok: false,
-      error: message === 'TIMEOUT' ? `move() took longer than ${timeLimit} ms` : message,
-      ms,
-      logs: drain(),
-    };
+    if (message === 'TIMEOUT') return { ok: false, timedOut: true, error: 'ran out of time', ms, logs: drain() };
+    return { ok: false, error: message, ms, logs: drain() };
   }
   const ms = Math.round(performance.now() - started);
   let parsed = null;

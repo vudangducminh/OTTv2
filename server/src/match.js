@@ -9,6 +9,12 @@ const MAX_BOT_LOG_LINES = 400;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** 300000 → "5:00". */
+function formatClock(ms) {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
 function describeMove(record) {
   const head = `#${record.ply} P${record.player} ${record.type} ${record.from} → ${record.to}`;
   if (record.outcome === 'win') return `${head} — beats ${record.defender.type}, which is removed`;
@@ -55,6 +61,9 @@ class Match extends EventEmitter {
     this.startedAt = null;
     this.finishedAt = null;
     this.bots = [null, null];
+    // Each bot's remaining thinking time (ms), and how long each move took.
+    this.clocks = null;
+    this.moveTimes = [];
     this.botLogLines = 0;
     this.logFile = null;
   }
@@ -97,12 +106,14 @@ class Match extends EventEmitter {
     this.startedAt = Date.now();
     this.game = OTT.Game.create();
     this.initial = this.game.tokens();
+    this.clocks = { 1: this.config.gameTimeLimitMs, 2: this.config.gameTimeLimitMs };
     this._openLog();
     const [p1, p2] = this.players;
     this._log('system', `Match #${this.id} "${this.name}" started: P1 ${p1.name} (Red) vs P2 ${p2.name} (Blue)`);
     this._log('system', `P1 starts on rows a–c and wins by reaching i9. P2 starts on rows g–i and wins by reaching a1.`);
     this._log('system', `P1 placement: ${placement(this.initial, 1)}`);
     this._log('system', `P2 placement: ${placement(this.initial, 2)}`);
+    this._log('system', `Each bot has ${formatClock(this.config.gameTimeLimitMs)} of thinking time for the whole game.`);
     this.emit('start');
     this.emit('update');
 
@@ -122,7 +133,7 @@ class Match extends EventEmitter {
   async _loadBots() {
     const { config } = this;
     for (const seat of [1, 2]) {
-      const bot = new BotProcess({ moveTimeLimit: config.moveTimeLimitMs, loadTimeLimit: config.loadTimeLimitMs });
+      const bot = new BotProcess({ loadTimeLimit: config.loadTimeLimitMs });
       this.bots[seat - 1] = bot;
       try {
         const { logs } = await bot.load(this.players[seat - 1].code);
@@ -140,15 +151,23 @@ class Match extends EventEmitter {
     const { game, config } = this;
     const seat = game.turn;
     const started = Date.now();
+    const remaining = this.clocks[seat];
     let reply;
     try {
-      reply = await this.bots[seat - 1].move(game, seat);
+      // A single move may use all of the bot's remaining time.
+      reply = await this.bots[seat - 1].move(game, seat, remaining);
     } catch (error) {
       if (!(error instanceof BotError)) throw error;
       this._botOutput(seat, error.logs);
-      this._forfeit(seat, error.message);
+      if (error.timedOut) {
+        this.clocks[seat] = 0;
+        this._forfeit(seat, `it ran out of time (${formatClock(config.gameTimeLimitMs)} for the game)`);
+      } else {
+        this._forfeit(seat, error.message);
+      }
       return;
     }
+    this.clocks[seat] = Math.max(0, remaining - reply.ms);
     this._botOutput(seat, reply.logs);
 
     const problem = game.validate(reply.move);
@@ -159,6 +178,7 @@ class Match extends EventEmitter {
 
     const record = game.play(reply.move);
     this.moves.push(record);
+    this.moveTimes.push(reply.ms);
     this._log('move', describeMove(record), seat);
     this.emit('move', record);
 
@@ -283,6 +303,8 @@ class Match extends EventEmitter {
       maxPlies: game ? game.maxPlies : OTT.MAX_PLIES,
       tokens: { 1: counts(1), 2: counts(2) },
       result: this.result,
+      clocks: this.clocks ? { ...this.clocks } : null,
+      gameTimeLimitMs: this.config.gameTimeLimitMs,
       tournament: this.tournament
         ? {
             id: this.tournament.id,
@@ -300,7 +322,7 @@ class Match extends EventEmitter {
   }
 
   snapshot() {
-    return { ...this.summary(), initial: this.initial, moves: this.moves, log: this.log };
+    return { ...this.summary(), initial: this.initial, moves: this.moves, moveTimes: this.moveTimes, log: this.log };
   }
 }
 

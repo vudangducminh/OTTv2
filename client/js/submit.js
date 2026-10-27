@@ -1,6 +1,8 @@
 // The dialog for submitting a bot, either to open a new match or to join one.
 
-import { $, el, fill, icon, api, store } from './ui.js';
+import { $, el, fill, icon, api, store, formatClock } from './ui.js';
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const BLANK = `const OTT = require('ottv2');
 
@@ -53,7 +55,7 @@ export class SubmitDialog {
     window.addEventListener('hashchange', () => this.close());
 
     const limits = $('#sd-limits');
-    if (config) limits.textContent = `${config.moveTimeLimitMs} ms per move, ${config.botMemoryMb} MB memory.`;
+    if (config) limits.textContent = `${Math.round(config.gameTimeLimitMs / 60000)} min of thinking time per game, ${config.botMemoryMb} MB memory.`;
   }
 
   setExamples(examples) {
@@ -111,6 +113,7 @@ export class SubmitDialog {
   }
 
   close() {
+    this._stopCheck({ quiet: true });
     if (this.dialog.open) this.dialog.close();
   }
 
@@ -214,15 +217,78 @@ export class SubmitDialog {
     this.check.replaceChildren();
   }
 
-  _showCheck(kind, title, logs = []) {
+  /** `action`: an optional { label, onClick } button, e.g. to stop a running check. */
+  _showCheck(kind, title, logs = [], action = null) {
     const iconName = kind === 'ok' ? 'check' : kind === 'bad' ? 'alert' : null;
     this.check.className = `check ${kind}`;
     fill(
       this.check,
-      el('div', { class: 'check-title' }, iconName ? icon(iconName) : el('span', { class: 'spinner', style: 'width:16px;height:16px;margin:0' }), el('span', {}, title)),
+      el(
+        'div',
+        { class: 'check-title' },
+        iconName ? icon(iconName) : el('span', { class: 'spinner', style: 'width:16px;height:16px;margin:0' }),
+        el('span', {}, title),
+        action ? el('button', { class: 'btn sm', type: 'button', onclick: action.onClick }, action.label) : null,
+      ),
       logs.length ? el('pre', {}, `console output:\n${logs.join('\n')}`) : null,
     );
     this.check.hidden = false;
+  }
+
+  /**
+   * Runs the bot's first move on a test board on the server, with the same
+   * clock it gets in a game, and shows the clock while it thinks. Resolves
+   * with the finished check, or null if it was stopped or couldn't run.
+   */
+  async _runCheck(code) {
+    const started = await api('POST', '/api/check', { code, seat: this.seat });
+    if (this._sessionEnded(started.status)) return null;
+    if (!started.ok) {
+      this._showCheck('bad', started.data?.error || 'The check could not start.');
+      return null;
+    }
+    let check = started.data.check;
+    const id = check.id;
+    this.checkId = id;
+    const since = Date.now() - check.elapsedMs;
+    const show = () => {
+      if (this.checkId !== id) return;
+      this._showCheck(
+        'busy',
+        `Running your bot's first move on a test board… ⏱ ${formatClock(Date.now() - since)} of its ${formatClock(check.limitMs)} clock`,
+        [],
+        { label: 'Stop', onClick: () => this._stopCheck() },
+      );
+    };
+    show();
+    const timer = setInterval(show, 250);
+    try {
+      while (check.status === 'running') {
+        await sleep(400);
+        if (this.checkId !== id) return null; // stopped
+        const polled = await api('GET', `/api/check/${id}`);
+        if (this._sessionEnded(polled.status)) return null;
+        if (!polled.ok) {
+          this._showCheck('bad', polled.data?.error || 'Lost track of the check.');
+          return null;
+        }
+        check = polled.data.check;
+      }
+    } finally {
+      clearInterval(timer);
+      if (this.checkId === id) this.checkId = null;
+    }
+    return check.cancelled ? null : check;
+  }
+
+  _stopCheck({ quiet = false } = {}) {
+    const id = this.checkId;
+    if (!id) return;
+    this.checkId = null;
+    api('POST', `/api/check/${id}/stop`, {});
+    if (quiet) return;
+    this._setBusy(false);
+    this._showCheck('bad', 'Stopped. Your bot was not submitted.');
   }
 
   _readForm() {
@@ -249,15 +315,15 @@ export class SubmitDialog {
     if (this.busy) return;
     const code = this.code.value;
     if (!code.trim()) return this._showCheck('bad', 'Paste or write your bot code first.');
-    this._setBusy(true, 'Running your bot on a test board…');
-    const { ok, status, data } = await api('POST', '/api/check', { code, seat: this.seat });
+    this._setBusy(true);
+    const check = await this._runCheck(code);
     this._setBusy(false);
-    if (this._sessionEnded(status)) return;
-    if (!ok || !data) return this._showCheck('bad', data?.error || 'The check failed.');
-    if (data.ok) {
-      this._showCheck('ok', `Looks good. On a test board your bot played ${data.move.from} → ${data.move.to} in ${data.ms} ms.`, data.logs);
+    if (!check) return;
+    if (check.ok) {
+      const took = `${(check.ms / 1000).toFixed(3)} s`;
+      this._showCheck('ok', `Looks good. On a test board your bot played ${check.move.from} → ${check.move.to} in ${took} (out of its ${formatClock(check.limitMs)} game clock).`, check.logs);
     } else {
-      this._showCheck('bad', data.error, data.logs);
+      this._showCheck('bad', check.error, check.logs);
     }
   }
 
@@ -265,11 +331,20 @@ export class SubmitDialog {
     if (this.busy) return;
     const values = this._readForm();
     if (!values) return;
-    this._setBusy(true, 'Checking your bot…');
+    this._setBusy(true);
+    const check = await this._runCheck(values.code);
+    if (!check || !check.ok) {
+      this._setBusy(false);
+      if (check) this._showCheck('bad', `Your bot did not pass the check: ${check.error}`, check.logs);
+      return;
+    }
+    // The server accepts the bot without testing it again: it passed this check.
+    this._showCheck('busy', 'Your bot passed the check. Submitting…');
+    const checkId = check.id;
     const request = {
-      create: () => api('POST', '/api/matches', values),
-      join: () => api('POST', `/api/matches/${this.match.id}/join`, { code: values.code }),
-      tournament: () => api('POST', `/api/tournaments/${this.tournament.id}/entry`, { code: values.code }),
+      create: () => api('POST', '/api/matches', { ...values, checkId }),
+      join: () => api('POST', `/api/matches/${this.match.id}/join`, { code: values.code, checkId }),
+      tournament: () => api('POST', `/api/tournaments/${this.tournament.id}/entry`, { code: values.code, checkId }),
     }[this.mode];
     const { ok, status, data } = await request();
     this._setBusy(false);
