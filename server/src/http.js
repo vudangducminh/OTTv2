@@ -195,6 +195,19 @@ function createServer({ arena, accounts = null, db = null, tournaments = null, c
   const bodyLimit = config.maxCodeBytes + 16 * 1024;
 
   const currentUser = (req) => (accounts ? accounts.userFromCookie(req.headers.cookie) : null);
+
+  // Through the Cloudflare tunnel every request arrives from the tunnel
+  // container, so the visitor's address and HTTPS use come from its headers.
+  const clientAddress = (req) => {
+    if (config.trustProxy) {
+      const forwarded = req.headers['cf-connecting-ip'] || String(req.headers['x-forwarded-for'] || '').split(',').pop().trim();
+      if (forwarded) return forwarded;
+    }
+    return req.socket.remoteAddress;
+  };
+  const viaHttps = (req) =>
+    Boolean(config.trustProxy) &&
+    (/^https$/i.test(req.headers['x-forwarded-proto'] || '') || /"scheme"\s*:\s*"https"/.test(req.headers['cf-visitor'] || ''));
   const needAccounts = () => {
     if (!accounts) throw new ApiError(503, 'Accounts are not available on this server.');
   };
@@ -220,7 +233,7 @@ function createServer({ arena, accounts = null, db = null, tournaments = null, c
       async (req, res) => {
         needAccounts();
         const body = await readJson(req, 4096);
-        const { user, cookie } = await accounts.register(body.username, body.password);
+        const { user, cookie } = await accounts.register(body.username, body.password, { secure: viaHttps(req) });
         sendJson(res, 201, { user }, { 'set-cookie': cookie });
       },
     ],
@@ -230,7 +243,7 @@ function createServer({ arena, accounts = null, db = null, tournaments = null, c
       async (req, res) => {
         needAccounts();
         const body = await readJson(req, 4096);
-        const { user, cookie } = await accounts.login(body.username, body.password, req.socket.remoteAddress);
+        const { user, cookie } = await accounts.login(body.username, body.password, clientAddress(req), { secure: viaHttps(req) });
         sendJson(res, 200, { user }, { 'set-cookie': cookie });
       },
     ],
@@ -240,7 +253,7 @@ function createServer({ arena, accounts = null, db = null, tournaments = null, c
       async (req, res) => {
         needAccounts();
         await readJson(req, 4096);
-        sendJson(res, 200, { ok: true }, { 'set-cookie': await accounts.logout(req.headers.cookie) });
+        sendJson(res, 200, { ok: true }, { 'set-cookie': await accounts.logout(req.headers.cookie, { secure: viaHttps(req) }) });
       },
     ],
     ['GET', /^\/api\/auth\/me$/, async (req, res) => sendJson(res, 200, { user: await currentUser(req) })],

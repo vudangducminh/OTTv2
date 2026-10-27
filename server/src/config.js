@@ -18,6 +18,12 @@ function number(name, fallback) {
 module.exports = Object.freeze({
   host: process.env.HOST || '0.0.0.0',
   port: number('PORT', 6767),
+  // The public address, e.g. https://ottv2.m2048.io (shown at startup).
+  publicUrl: process.env.PUBLIC_URL || null,
+  // Set when visitors come through Cloudflare, so each visitor's address and
+  // whether they used HTTPS are read from its headers (CF-Connecting-IP,
+  // X-Forwarded-Proto). HTTPS visits then get Secure login cookies.
+  trustProxy: /^(1|true|yes)$/i.test(process.env.TRUST_PROXY || ''),
 
   // Defaults to the database from `docker compose up -d db`.
   databaseUrl: process.env.DATABASE_URL || 'postgres://ottv2:ottv2@localhost:5433/ottv2',

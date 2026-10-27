@@ -30,6 +30,7 @@ const config = {
   ...baseConfig,
   moveDelayMs: 0,
   tournamentMoveDelayMs: 0,
+  trustProxy: false, // whatever .env says; one test turns it on explicitly
   logDir: fs.mkdtempSync(path.join(os.tmpdir(), 'ottv2-test-')),
 };
 let db;
@@ -185,6 +186,44 @@ dbTest('register, log in, log out', async () => {
   const right = await ann.api('POST', '/api/auth/login', { username: 'Ann', password: 'correct-horse' });
   assert.equal(right.status, 200);
   assert.equal((await ann.api('GET', '/api/auth/me')).body.user.username, 'ann');
+});
+
+dbTest('behind Cloudflare: Secure cookies on HTTPS, throttling per visitor and username', async () => {
+  // A second server with TRUST_PROXY on, as when it's reached through the tunnel.
+  const proxied = createServer({
+    arena: new Arena(config, { db }),
+    accounts: new Accounts(db, config),
+    db,
+    config: { ...config, trustProxy: true },
+  });
+  await new Promise((resolve) => proxied.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${proxied.address().port}`;
+  const post = (path, body, headers = {}) =>
+    fetch(url + path, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
+  try {
+    const https = await post('/api/auth/register', { username: 'cf_https', password: 'password123' }, { 'x-forwarded-proto': 'https' });
+    assert.match(https.headers.get('set-cookie'), /; Secure/);
+    const plain = await post('/api/auth/register', { username: 'cf_plain', password: 'password123' });
+    assert.doesNotMatch(plain.headers.get('set-cookie'), /Secure/, 'plain-HTTP visits (the LAN address) keep working');
+
+    // Without TRUST_PROXY the same headers are ignored.
+    const direct = await fetch(`${base}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-forwarded-proto': 'https' },
+      body: JSON.stringify({ username: 'cf_direct', password: 'password123' }),
+    });
+    assert.doesNotMatch(direct.headers.get('set-cookie'), /Secure/);
+
+    // Ten wrong passwords for one account from one visitor block that pair only.
+    const attempt = (username, ip, password = 'wrong-password') => post('/api/auth/login', { username, password }, { 'cf-connecting-ip': ip });
+    for (let i = 0; i < 10; i++) assert.equal((await attempt('cf_https', '203.0.113.7')).status, 401);
+    assert.equal((await attempt('cf_https', '203.0.113.7')).status, 429);
+    assert.equal((await attempt('cf_https', '203.0.113.8')).status, 401, 'another visitor is not blocked');
+    assert.equal((await attempt('cf_plain', '203.0.113.7', 'password123')).status, 200, 'another account from the same visitor works');
+  } finally {
+    proxied.closeAllConnections();
+    proxied.close();
+  }
 });
 
 dbTest('submitting a bot needs a login and a JSON body', async () => {

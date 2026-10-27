@@ -32,6 +32,9 @@ services:
     environment:
       DATABASE_URL: postgres://ottv2:${POSTGRES_PASSWORD:-ottv2}@db:5432/ottv2
       PORT: 6767
+      # Set in .env when publishing through the Cloudflare tunnel (see below).
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      TRUST_PROXY: ${TRUST_PROXY:-}
     ports:
       # APP_PORT=8080 docker compose up   → serve on another host port
       - "${APP_PORT:-6767}:6767"
@@ -40,6 +43,24 @@ services:
     volumes:
       - logs:/app/server/logs
     restart: unless-stopped
+
+  # Cloudflare Tunnel: publishes the app at https://ottv2.m2048.io through an
+  # OUTGOING connection, so this machine needs no public IP, port forwarding or
+  # certificate. Cloudflare handles HTTPS.
+  #
+  # Start it with:  docker compose --profile tunnel up -d
+  # In the tunnel's published application, the Service URL is http://app:6767.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      # The OTTv2 tunnel's token, from .env (it's a credential; .env is gitignored).
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    depends_on:
+      app:
+        condition: service_healthy
 
 volumes:
   pgdata:

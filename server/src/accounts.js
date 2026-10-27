@@ -70,7 +70,7 @@ class Accounts {
   constructor(db, config) {
     this.db = db;
     this.sessionDays = config.sessionDays || 30;
-    this.failures = new Map(); // address → { count, since }
+    this.failures = new Map(); // "address|username" → { count, since }
   }
 
   /** Creates an account. Returns the user (no session). */
@@ -82,33 +82,41 @@ class Accounts {
     return user;
   }
 
-  /** Creates an account and logs it in. Returns { user, cookie }. */
-  async register(username, password) {
+  /**
+   * Creates an account and logs it in. Returns { user, cookie }.
+   * `secure`: the visitor is on HTTPS, so the cookie is marked Secure.
+   */
+  async register(username, password, { secure = false } = {}) {
     const user = await this.create(typeof username === 'string' ? username.trim() : username, password);
-    return { user, cookie: await this._startSession(user) };
+    return { user, cookie: await this._startSession(user, secure) };
   }
 
-  /** Returns { user, cookie }. `address` is used to slow down password guessing. */
-  async login(username, password, address) {
-    this._checkThrottle(address);
+  /**
+   * Returns { user, cookie }. Failed attempts are counted per address and
+   * username, so guessing is slowed down without one visitor (or a whole
+   * class behind one school address) locking out everyone else.
+   */
+  async login(username, password, address, { secure = false } = {}) {
     if (typeof username !== 'string' || typeof password !== 'string' || !username.trim() || !password) {
       throw new ApiError(400, 'Enter your username and password.');
     }
+    const key = `${address}|${username.trim().toLowerCase()}`;
+    this._checkThrottle(key);
     const found = await this.db.findLogin(username.trim());
     const ok = await verifyPassword(password.slice(0, MAX_PASSWORD), found ? found.passwordHash : await DUMMY_HASH);
     if (!found || !ok) {
-      this._recordFailure(address);
+      this._recordFailure(key);
       throw new ApiError(401, 'Wrong username or password.');
     }
-    this.failures.delete(address);
-    return { user: found.user, cookie: await this._startSession(found.user) };
+    this.failures.delete(key);
+    return { user: found.user, cookie: await this._startSession(found.user, secure) };
   }
 
   /** Ends the session in `cookieHeader`. Returns the cookie that clears it. */
-  async logout(cookieHeader) {
+  async logout(cookieHeader, { secure = false } = {}) {
     const token = parseCookies(cookieHeader)[COOKIE];
     if (token) await this.db.deleteSession(hashToken(token));
-    return `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+    return `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? '; Secure' : ''}`;
   }
 
   /** The logged-in user for a request's Cookie header, or null. */
@@ -128,19 +136,20 @@ class Accounts {
     return found.user;
   }
 
-  async _startSession(user) {
+  async _startSession(user, secure) {
     const token = crypto.randomBytes(32).toString('base64url');
     const maxAge = this.sessionDays * 24 * 60 * 60;
     await this.db.createSession(user.id, hashToken(token), new Date(Date.now() + maxAge * 1000));
     // HttpOnly: page scripts can't read it. SameSite=Lax: other sites can't send it with their requests.
-    return `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`;
+    // Secure (on HTTPS visits): the browser never sends it over plain HTTP.
+    return `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure ? '; Secure' : ''}`;
   }
 
-  _checkThrottle(address) {
-    const entry = this.failures.get(address);
+  _checkThrottle(key) {
+    const entry = this.failures.get(key);
     if (!entry) return;
     if (Date.now() - entry.since > FAILURE_WINDOW_MS) {
-      this.failures.delete(address);
+      this.failures.delete(key);
       return;
     }
     if (entry.count >= MAX_FAILURES) {
@@ -149,9 +158,9 @@ class Accounts {
     }
   }
 
-  _recordFailure(address) {
-    const entry = this.failures.get(address);
-    if (!entry || Date.now() - entry.since > FAILURE_WINDOW_MS) this.failures.set(address, { count: 1, since: Date.now() });
+  _recordFailure(key) {
+    const entry = this.failures.get(key);
+    if (!entry || Date.now() - entry.since > FAILURE_WINDOW_MS) this.failures.set(key, { count: 1, since: Date.now() });
     else entry.count += 1;
   }
 }

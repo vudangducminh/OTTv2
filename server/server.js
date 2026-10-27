@@ -36,6 +36,7 @@ async function main() {
 
   server.listen(config.port, config.host, () => {
     console.log(`OTTv2 arena running on http://10.11.174.165:${config.port}`);
+    if (config.publicUrl) console.log(`                    and ${config.publicUrl}`);
     console.log(`Match logs are written to ${config.logDir}`);
   });
 
