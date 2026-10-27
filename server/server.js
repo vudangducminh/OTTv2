@@ -1,17 +1,9 @@
-const os = require('node:os');
 const config = require('./src/config');
 const { Accounts } = require('./src/accounts');
 const { Arena } = require('./src/arena');
 const { Database } = require('./src/db');
 const { createServer } = require('./src/http');
 const { Tournaments } = require('./src/tournaments');
-
-function localAddresses() {
-  return Object.values(os.networkInterfaces())
-    .flat()
-    .filter((entry) => entry && entry.family === 'IPv4' && !entry.internal)
-    .map((entry) => entry.address);
-}
 
 async function main() {
   const db = new Database(config.databaseUrl);
@@ -43,8 +35,7 @@ async function main() {
   await tournaments.init(); // resume tournaments that were running before a restart
 
   server.listen(config.port, config.host, () => {
-    console.log(`OTTv2 arena running on http://localhost:${config.port}`);
-    for (const address of localAddresses()) console.log(`                    and http://${address}:${config.port}`);
+    console.log(`OTTv2 arena running on http://10.11.174.165:${config.port}`);
     console.log(`Match logs are written to ${config.logDir}`);
   });
 

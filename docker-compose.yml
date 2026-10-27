@@ -1,4 +1,4 @@
-# docker compose up --build        → app on http://localhost:6767 with its own PostgreSQL
+# docker compose up --build        → app on http://10.11.174.165 (and :6767) with its own PostgreSQL
 # docker compose up -d db          → only the database, for `npm run dev` on your machine
 #
 # Set POSTGRES_PASSWORD (and APP_PORT) in a .env file next to this one to change the defaults.
@@ -35,6 +35,8 @@ services:
     ports:
       # APP_PORT=8080 docker compose up   → serve on another host port
       - "${APP_PORT:-6767}:6767"
+      # Also on port 80, so the plain address (http://10.11.174.165) works without ":6767".
+      - "${HTTP_PORT:-80}:6767"
     volumes:
       - logs:/app/server/logs
     restart: unless-stopped
